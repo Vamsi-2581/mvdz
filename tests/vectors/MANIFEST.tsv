@@ -1,0 +1,47 @@
+# file	decoded_sha256 or "error: <message>"	decoded_size	how it was made
+# Valid files must decode to the SHA-256; hostile files must be refused. The message is the reference's: another decoder should report the same category (format, corrupt, limit; FORMAT.md 9), in its own words.
+duel.normal.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel = sample 3ff1f82b...8d92; compress
+duel.fast.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel = sample 3ff1f82b...8d92; compress --fast
+duel.normal.seg64k.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel = sample 3ff1f82b...8d92; compress -s 64K --ext source=hub
+duel.fast.seg64k.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel = sample 3ff1f82b...8d92; compress --fast -s 64K
+duel.normal.streamed.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel = sample 3ff1f82b...8d92; Writer, segment 64K, 4000-byte writes (META before the demoinfo segment)
+duel.fast.streamed.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel = sample 3ff1f82b...8d92; Writer --fast, segment 64K
+duel.untransformed.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel = sample 3ff1f82b...8d92; every segment zstd (the fallback layout), segment 64K
+duel-truncated.normal.mvdz	abdcc5813b84e4fba456c40e0dff9bc58abdfbe312a49495eb1d8dc666ebe057	150000	the first 150000 bytes of duel (ends inside a frame)
+duel.attach.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel.normal + a zstd attachment (text/vtt) and a stored one (random bytes)
+duel.forward.mvdz	3ff1f82b5f0274da0af3f1744e7660d602159c3edfb0089134b728d3f3408d92	266163	duel.attach + prefix flag 0x80 and reserved bytes, an unknown section 0x40, an unknown META tag, an unknown attachment key and codec
+float-mvd1.normal.mvdz	3865825ba0ea162e954e4b68f2b102430d7553df8574c345549ebe1ab0f18781	339398	rev-correct gen1/float_mvd1.mvd (MVD1 float coordinates, 3 escapes)
+float-mvd1.fast.mvdz	3865825ba0ea162e954e4b68f2b102430d7553df8574c345549ebe1ab0f18781	339398	the same, --fast
+float-fte.normal.mvdz	5ab0aa3f43bb05996ea450a369db8a17be1c32905765535c706adc6de68942eb	300000	the first 300000 bytes of sample 3fdd8018 (FTE float coordinates)
+float-fte.normal.streamed.mvdz	5ab0aa3f43bb05996ea450a369db8a17be1c32905765535c706adc6de68942eb	300000	the same, Writer, segment 64K (no demoinfo: META written last)
+escapes.normal.mvdz	d5b2a33c09feada00cfc69abdb0a3177f0fece11f22a4fcfbc993bb549453469	7128	synthetic demo with unknown commands and lying hidden blocks
+escapes.fast.mvdz	d5b2a33c09feada00cfc69abdb0a3177f0fece11f22a4fcfbc993bb549453469	7128	the same, --fast
+demoinfo-multi.normal.mvdz	7217cdf0631b00b9b2863e02ee0b64fbdc0fbfba734c51f3b6f7800d4615911d	16528	synthetic demo carrying a 3-block KTX demoinfo twice; segment 1000
+demoinfo-multi.normal.streamed.mvdz	7217cdf0631b00b9b2863e02ee0b64fbdc0fbfba734c51f3b6f7800d4615911d	16528	the same, Writer, segment 1000
+random.normal.mvdz	2d2506480b05f18be895b70c6faeb3b52ad41b68438da3aa23da98961a145f89	3000	3000 random bytes (no frame: all tail)
+random.stored.mvdz	2d2506480b05f18be895b70c6faeb3b52ad41b68438da3aa23da98961a145f89	3000	the same, untransformed: zstd does not pay, stored
+empty.normal.mvdz	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	0	an empty demo
+empty.streamed.mvdz	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	0	an empty demo, Writer (no segment)
+start-u64.normal.mvdz	249a09bb6c6ec8b9b81d33f8c6bf8972f9f1e896873277d76e4819e47599e523	5502	synthetic demo with a 0x000B start timestamp in the 8-byte u64le form (META tag 11 = 1778675998090)
+hostile-base-cut.mvdz	error: corrupt: incomplete file (no trailer)	-	a small valid file cut in half (no trailer)
+hostile-no-trailer.mvdz	error: corrupt: incomplete file (no trailer)	-	complete sections, INDEX included, but no trailer
+hostile-after-trailer.mvdz	error: corrupt: trailer not at the end	-	one byte after the trailer
+hostile-dup-meta.mvdz	error: corrupt: duplicate META	-	a second META with another identity, prefix and trailer pointing at the first
+hostile-forged-identity.mvdz	error: corrupt: identity mismatch	-	the META's sha256 replaced (CRC recomputed): only a full decode notices
+hostile-unknown-critical.mvdz	error: format: unknown critical section	-	an unknown critical section (kind 0x99)
+hostile-dropped-segment.mvdz	error: corrupt: segment out of order	-	a segment's kind changed to an unknown non-critical kind
+hostile-swapped-segments.mvdz	error: corrupt: segment out of order	-	two segments swapped (index offsets fixed)
+hostile-meta-crc.mvdz	error: corrupt: metadata checksum	-	META stored raw with one bit of its fields flipped (CRC not updated)
+hostile-meta-256m.mvdz	error: corrupt: metadata size	-	META declaring 256 MiB of fields
+hostile-segment-ratio.mvdz	error: corrupt: segment size	-	a few-byte zstd segment declaring 4 GiB
+hostile-index-size.mvdz	error: corrupt: index does not match segments	-	INDEX claiming 60 GB more than the segments
+hostile-share-missing.mvdz	error: corrupt: demoinfo share	-	segments share demoinfo the META does not have
+hostile-segment-coding.mvdz	error: format: unknown segment coding	-	a segment with coding 3
+hostile-segment-flags.mvdz	error: corrupt: segment flags	-	a transform segment with flag bit 1 set
+hostile-model-decisions.mvdz	error: corrupt: model	-	a model of 2000 full tables in a few bytes (rule M2)
+hostile-model-padding.mvdz	error: corrupt: model	-	a model header followed by 64 zero bytes (not consumed exactly)
+hostile-meta-ratio.mvdz	error: corrupt: metadata size	-	META fields of 16 MiB stored as zstd in a few KB (ratio limit)
+hostile-zstd-legacy.mvdz	error: corrupt: zstd data	-	META as a legacy (v0.7) zstd frame
+hostile-zstd-window.mvdz	error: corrupt: zstd data	-	a zstd segment whose frame declares a 2^40-byte window
+hostile-share-empty.mvdz	error: corrupt: demoinfo share	-	a segment flagged as sharing demoinfo with an empty share
+hostile-meta-no-timing.mvdz	error: corrupt: metadata identity	-	META without tag 8 (timing)

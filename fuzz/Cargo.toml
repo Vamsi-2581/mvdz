@@ -1,0 +1,64 @@
+[package]
+name = "mvdz-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mvdz = { path = ".." }
+serde_json = "1"
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "read_metadata"
+path = "fuzz_targets/read_metadata.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "attachments"
+path = "fuzz_targets/attachments.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "stream_reader"
+path = "fuzz_targets/stream_reader.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "stream_writer"
+path = "fuzz_targets/stream_writer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "capi"
+path = "fuzz_targets/capi.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "gen_rt"
+path = "fuzz_targets/gen_rt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "compress_rt"
+path = "fuzz_targets/compress_rt.rs"
+test = false
+doc = false

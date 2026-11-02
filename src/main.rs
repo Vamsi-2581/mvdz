@@ -1,0 +1,602 @@
+use mvdz::api::{self, Config};
+use mvdz::{Level, Limits, ReadOptions};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::time::Instant;
+
+fn usage() -> ! {
+    eprintln!(
+        "usage:
+  mvdz compress   [--fast] [-s size] [-j threads] [--ext key=value]... in.mvd out.mvdz
+  mvdz decompress [-j threads] [--max-memory size] [--trusted] in.mvdz out.mvd
+  mvdz info       file.mvdz...                     metadata, index, attachments as JSON
+  mvdz census     [--tsv] files-or-dirs...         census of .mvdz / .mvd files
+  mvdz attach add file.mvdz name path [--mime type] [--meta key=value]...
+  mvdz attach ls  file.mvdz [prefix]
+  mvdz attach extract file.mvdz name out
+  mvdz attach rm  file.mvdz name...
+  mvdz attach export in.mvdz out.mvdz [--keep name]... [--keep-prefix p]... [--drop name]... [--drop-prefix p]...
+                  copy keeping the attachments that match a keep (all if none given) and no drop
+  mvdz bench      [--levels normal,fast] [-s size] [-r reps] [-j threads] [--no-verify]
+                  [--skip-compress] [--trusted] [--files out.tsv] [--streams out.tsv] files...
+'-' as a file name is standard input or output. Sizes take K, M, G suffixes
+(binary: 1M = 1048576). --fast selects per-stream zstd (default: normal).
+-s cuts the demo into independently decodable segments (default: one).
+--trusted skips the SHA-256 identity check (CRC-32C checks only): only for
+files whose SHA-256 was verified before. attach add --mime defaults to
+application/octet-stream; --meta keys need a prefix, x- or vendor. (FORMAT.md 10.1)."
+    );
+    std::process::exit(2)
+}
+
+struct Args {
+    levels: Vec<Level>,
+    seg: usize,
+    threads: usize,
+    reps: usize,
+    max_memory: Option<u64>,
+    streams: Option<String>,
+    perfile: Option<String>,
+    files: Vec<String>,
+    no_verify: bool,
+    ext: Vec<(String, Vec<u8>)>,
+    kv: Vec<(String, String)>,
+    mime: String,
+    tsv: bool,
+    skip_compress: bool,
+    trusted: bool,
+    keep: Vec<String>,
+    keep_prefix: Vec<String>,
+    drop: Vec<String>,
+    drop_prefix: Vec<String>,
+}
+
+fn size(s: &str) -> u64 {
+    let (num, mul) = match s.as_bytes().last() {
+        Some(b'k' | b'K') => (&s[..s.len() - 1], 1u64 << 10),
+        Some(b'm' | b'M') => (&s[..s.len() - 1], 1 << 20),
+        Some(b'g' | b'G') => (&s[..s.len() - 1], 1 << 30),
+        _ => (s, 1),
+    };
+    num.parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(mul))
+        .unwrap_or_else(|| usage())
+}
+
+fn level_name(l: Level) -> &'static str {
+    match l {
+        Level::Normal => "normal",
+        Level::Fast => "fast",
+    }
+}
+
+fn parse(args: &[String]) -> Args {
+    let mut a = Args {
+        levels: vec![Level::Normal],
+        seg: 0,
+        threads: std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+        reps: 3,
+        max_memory: None,
+        streams: None,
+        perfile: None,
+        files: Vec::new(),
+        no_verify: false,
+        ext: Vec::new(),
+        kv: Vec::new(),
+        mime: "application/octet-stream".into(),
+        tsv: false,
+        skip_compress: false,
+        trusted: false,
+        keep: Vec::new(),
+        keep_prefix: Vec::new(),
+        drop: Vec::new(),
+        drop_prefix: Vec::new(),
+    };
+    let mut i = 0;
+    while i < args.len() {
+        let s = &args[i];
+        let mut val = || {
+            i += 1;
+            args.get(i).cloned().unwrap_or_else(|| usage())
+        };
+        match s.as_str() {
+            "--fast" => a.levels = vec![Level::Fast],
+            "--levels" => {
+                a.levels = val()
+                    .split(',')
+                    .map(|l| match l {
+                        "normal" => Level::Normal,
+                        "fast" => Level::Fast,
+                        _ => usage(),
+                    })
+                    .collect()
+            }
+            "-s" | "--segment" => a.seg = usize::try_from(size(&val())).unwrap_or_else(|_| usage()),
+            "-j" | "--threads" => a.threads = val().parse().unwrap_or_else(|_| usage()),
+            "-r" | "--reps" => a.reps = val().parse().unwrap_or_else(|_| usage()),
+            "--max-memory" => a.max_memory = Some(size(&val())),
+            "--streams" => a.streams = Some(val()),
+            "--files" => a.perfile = Some(val()),
+            "--no-verify" => a.no_verify = true,
+            "--tsv" => a.tsv = true,
+            "--skip-compress" => a.skip_compress = true,
+            "--trusted" => a.trusted = true,
+            "--keep" => a.keep.push(val()),
+            "--keep-prefix" => a.keep_prefix.push(val()),
+            "--drop" => a.drop.push(val()),
+            "--drop-prefix" => a.drop_prefix.push(val()),
+            "--mime" => a.mime = val(),
+            "--ext" | "--meta" => {
+                let flag = s.clone();
+                let v = val();
+                let (k, x) = v.split_once('=').unwrap_or_else(|| usage());
+                if flag == "--ext" {
+                    a.ext.push((k.into(), x.as_bytes().to_vec()));
+                } else {
+                    a.kv.push((k.into(), x.into()));
+                }
+            }
+            "-" => a.files.push(s.clone()),
+            _ if s.starts_with('-') => usage(),
+            _ => a.files.push(s.clone()),
+        }
+        i += 1;
+    }
+    a
+}
+
+fn die(e: impl std::fmt::Display) -> ! {
+    eprintln!("error: {e}");
+    std::process::exit(1)
+}
+
+/// Reads a whole input file (or standard input), once.
+fn read_input(p: &str) -> Vec<u8> {
+    if p == "-" {
+        let mut b = Vec::new();
+        std::io::stdin()
+            .lock()
+            .read_to_end(&mut b)
+            .unwrap_or_else(|e| die(e));
+        b
+    } else {
+        std::fs::read(p).unwrap_or_else(|e| die(format!("{p}: {e}")))
+    }
+}
+
+/// Writes an output: standard output, a device or pipe directly, a
+/// regular file atomically (temporary file and rename).
+fn write_output(p: &str, data: &[u8]) {
+    if p == "-" {
+        let mut o = std::io::stdout().lock();
+        o.write_all(data)
+            .and_then(|_| o.flush())
+            .unwrap_or_else(|e| die(e));
+        return;
+    }
+    let path = std::path::Path::new(p);
+    match std::fs::metadata(path) {
+        Ok(m) if !m.is_file() => {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap_or_else(|e| die(format!("{p}: {e}")));
+            f.write_all(data)
+                .and_then(|_| f.flush())
+                .unwrap_or_else(|e| die(format!("{p}: {e}")));
+        }
+        _ => api::write_file_atomic(path, data).unwrap_or_else(|e| die(format!("{p}: {e}"))),
+    }
+}
+
+fn read_options(a: &Args) -> ReadOptions {
+    let mut l = Limits::default();
+    if let Some(m) = a.max_memory {
+        l.memory = m;
+    }
+    ReadOptions {
+        limits: l,
+        trusted: a.trusted,
+    }
+}
+
+fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.is_empty() {
+        usage();
+    }
+    #[cfg(all(feature = "sampler", target_os = "linux", target_arch = "x86_64"))]
+    let _sampler = std::env::var("MVDZ_SAMPLE")
+        .ok()
+        .map(mvdz::sampler::Guard::start);
+    let a = parse(&argv[1..]);
+    match argv[0].as_str() {
+        "compress" | "c" => {
+            if a.files.len() != 2 {
+                usage();
+            }
+            let src = read_input(&a.files[0]);
+            let cfg = Config {
+                level: a.levels[0],
+                segment: a.seg,
+                threads: a.threads,
+                verify: !a.no_verify,
+                ext: a.ext.clone(),
+            };
+            let (out, info) = api::compress_info(&src, &cfg).unwrap_or_else(|e| die(e));
+            if info.fallback_segments > 0 {
+                eprintln!(
+                    "note: {} of {} segments stored without the transform",
+                    info.fallback_segments, info.segments
+                );
+            }
+            write_output(&a.files[1], &out);
+        }
+        "decompress" | "d" => {
+            if a.files.len() != 2 {
+                usage();
+            }
+            let src = read_input(&a.files[0]);
+            let out =
+                api::decompress_with(&src, a.threads, &read_options(&a)).unwrap_or_else(|e| die(e));
+            drop(src);
+            write_output(&a.files[1], &out);
+        }
+        "bench" => bench(&a),
+        "info" => info(&a),
+        "census" => census(&a),
+        "attach" => attach(&argv),
+        _ => usage(),
+    }
+}
+
+/// (median, min, max)
+fn stats(v: &mut [f64]) -> (f64, f64, f64) {
+    if v.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = v.len();
+    let med = if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    };
+    (med, v[0], v[n - 1])
+}
+
+fn fmt(s: (f64, f64, f64)) -> String {
+    format!("{:.2} [{:.2}-{:.2}]", s.0, s.1, s.2)
+}
+
+fn loadavg() -> String {
+    std::fs::read_to_string("/proc/loadavg")
+        .map(|s| s.split_whitespace().take(3).collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
+}
+
+/// In-memory library benchmark: every figure is MB/s of raw demo
+/// (MB = 10^6 bytes), the median of `reps` runs with [min-max].
+fn bench(a: &Args) {
+    let files: Vec<(String, Vec<u8>)> = a
+        .files
+        .iter()
+        .map(|f| (f.clone(), std::fs::read(f).unwrap_or_else(|e| die(e))))
+        .collect();
+    let raw: usize = files.iter().map(|f| f.1.len()).sum();
+    let mb = raw as f64 / 1e6;
+    let nt = a.threads.max(1);
+    let reps = a.reps.max(3);
+    let lim = read_options(a);
+    let dec = |c: &[u8], t: usize| api::decompress_with(c, t, &lim);
+    println!(
+        "files {}  raw {:.2} MB (10^6 bytes)  reps {}  segment {}  threads {}  verify {}  trusted {}  loadavg {}",
+        files.len(),
+        mb,
+        reps,
+        a.seg,
+        nt,
+        !a.no_verify,
+        a.trusted,
+        loadavg()
+    );
+    println!(
+        "MB/s of raw demo: median [min-max] over {reps} runs; 'batch' = files in parallel on {nt} threads, 1 thread each"
+    );
+    let mut stream_rows: BTreeMap<(String, String), (usize, usize)> = BTreeMap::new();
+    let mut perfile =
+        String::from("level\tfile\traw\tpacked\tsha_ok\tfallback_segments\tescaped\n");
+    for &level in &a.levels {
+        let ln = level_name(level);
+        let cfg = |threads: usize| Config {
+            level,
+            segment: a.seg,
+            threads,
+            verify: !a.no_verify,
+            ext: Vec::new(),
+        };
+        let c1 = cfg(1);
+        let comp: Vec<(Vec<u8>, api::Info)> = mvdz::util::par_map(nt, files.len(), |i| {
+            api::compress_info(&files[i].1, &c1).unwrap_or_else(|e| die(e))
+        });
+        let bytes: usize = comp.iter().map(|c| c.0.len()).sum();
+        let fb: usize = comp.iter().map(|c| c.1.fallback_segments).sum();
+        let oks: Vec<bool> =
+            mvdz::util::par_map(nt, files.len(), |i| match api::decompress(&comp[i].0, 1) {
+                Ok(back) => Sha256::digest(&back) == Sha256::digest(&files[i].1),
+                Err(_) => false,
+            });
+        let ok = oks.iter().filter(|&&x| x).count();
+        for (i, f) in files.iter().enumerate() {
+            let base = std::path::Path::new(&f.0)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            perfile += &format!(
+                "{ln}\t{base}\t{}\t{}\t{}\t{}\t{}\n",
+                f.1.len(),
+                comp[i].0.len(),
+                oks[i],
+                comp[i].1.fallback_segments,
+                comp[i].1.escaped
+            );
+            if !oks[i] {
+                eprintln!("ROUND TRIP FAILED: level {ln} file {}", f.0);
+            }
+        }
+        for (_, info) in &comp {
+            for s in &info.streams {
+                let e = stream_rows
+                    .entry((ln.to_string(), mvdz::streams::name(s.id)))
+                    .or_default();
+                e.0 += s.count;
+                e.1 += s.packed;
+            }
+        }
+        let (mut tc1, mut td1, mut tcn, mut tdn, mut tcb, mut tdb) =
+            (vec![], vec![], vec![], vec![], vec![], vec![]);
+        let cn = cfg(nt);
+        for _ in 0..reps {
+            if !a.skip_compress {
+                let t = Instant::now();
+                for f in &files {
+                    std::hint::black_box(api::compress(&f.1, &c1).ok());
+                }
+                tc1.push(mb / t.elapsed().as_secs_f64());
+            }
+            let t = Instant::now();
+            for c in &comp {
+                std::hint::black_box(dec(&c.0, 1).ok());
+            }
+            td1.push(mb / t.elapsed().as_secs_f64());
+            if nt > 1 && !a.skip_compress {
+                let t = Instant::now();
+                for f in &files {
+                    std::hint::black_box(api::compress(&f.1, &cn).ok());
+                }
+                tcn.push(mb / t.elapsed().as_secs_f64());
+                let t = Instant::now();
+                mvdz::util::par_map(nt, files.len(), |i| {
+                    std::hint::black_box(api::compress(&files[i].1, &c1).map(|v| v.len()).ok())
+                });
+                tcb.push(mb / t.elapsed().as_secs_f64());
+            }
+            if nt > 1 {
+                let t = Instant::now();
+                for c in &comp {
+                    std::hint::black_box(dec(&c.0, nt).ok());
+                }
+                tdn.push(mb / t.elapsed().as_secs_f64());
+                let t = Instant::now();
+                mvdz::util::par_map(nt, comp.len(), |i| {
+                    std::hint::black_box(dec(&comp[i].0, 1).map(|v| v.len()).ok())
+                });
+                tdb.push(mb / t.elapsed().as_secs_f64());
+            }
+        }
+        println!(
+            "{ln:<7} bytes {bytes}  ratio {:.4}  sha ok {ok}/{}  fallback segments {fb}",
+            bytes as f64 / raw as f64,
+            files.len()
+        );
+        println!(
+            "  compress   1t {}   {nt}t {}   batch {}",
+            fmt(stats(&mut tc1)),
+            fmt(stats(&mut tcn)),
+            fmt(stats(&mut tcb))
+        );
+        println!(
+            "  decompress 1t {}   {nt}t {}   batch {}",
+            fmt(stats(&mut td1)),
+            fmt(stats(&mut tdn)),
+            fmt(stats(&mut tdb))
+        );
+    }
+    println!("loadavg after: {}", loadavg());
+    if let Some(path) = &a.perfile {
+        std::fs::write(path, &perfile).unwrap_or_else(|e| die(e));
+    }
+    if let Some(path) = &a.streams {
+        let mut s = String::from("level\tstream\tcount\tpacked\n");
+        for ((l, name), (count, packed)) in &stream_rows {
+            s += &format!("{l}\t{name}\t{count}\t{packed}\n");
+        }
+        std::fs::write(path, s).unwrap_or_else(|e| die(e));
+    }
+}
+
+fn info(a: &Args) {
+    for f in &a.files {
+        let r = std::fs::File::open(f).unwrap_or_else(|e| die(e));
+        match api::read_metadata(std::io::BufReader::new(r)) {
+            Ok(fi) => println!("{}", fi.to_json()),
+            Err(e) => die(format!("{f}: {e}")),
+        }
+    }
+}
+
+/// Census over many files: .mvdz (read from the metadata) or raw .mvd
+/// (scanned). One JSON object per line, or a TSV of the main counts.
+fn census(a: &Args) {
+    let mut files = Vec::new();
+    for f in &a.files {
+        let p = std::path::Path::new(f);
+        if p.is_dir() {
+            let mut v: Vec<_> = std::fs::read_dir(p)
+                .unwrap_or_else(|e| die(e))
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .collect();
+            v.sort();
+            files.extend(v);
+        } else {
+            files.push(p.to_path_buf());
+        }
+    }
+    // names and values come from the files: printed escaped, so a file
+    // cannot inject terminal escapes, columns or rows
+    let esc = |s: &str| s.escape_debug().to_string();
+    if a.tsv {
+        println!(
+            "file\tsha256\tsize\tframes\tduration_ms\tmap\tprotocol_ext\tescapes\ttruncated\tdemoinfo\tcensus_bytes"
+        );
+    }
+    for p in files {
+        let name = p
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let m = if name.ends_with(".mvdz") {
+            let Ok(r) = std::fs::File::open(&p) else {
+                continue;
+            };
+            match api::read_metadata(std::io::BufReader::new(r)) {
+                Ok(fi) => fi.meta,
+                Err(e) => {
+                    eprintln!("{name}: {e}");
+                    continue;
+                }
+            }
+        } else if name.ends_with(".mvd") {
+            let Ok(b) = std::fs::read(&p) else { continue };
+            mvdz::Metadata::from_scan(mvdz::meta::scan(&b), Vec::new())
+        } else {
+            continue;
+        };
+        let census: serde_json::Value =
+            serde_json::from_str(&m.census).unwrap_or(serde_json::Value::Null);
+        if a.tsv {
+            let g = |path: &[&str]| -> String {
+                let mut v = &census;
+                for k in path {
+                    v = &v[*k];
+                }
+                match v {
+                    serde_json::Value::String(s) => esc(s),
+                    serde_json::Value::Null => String::new(),
+                    x => x.to_string(),
+                }
+            };
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}/{}/{}\t{}\t{}\t{}\t{}",
+                esc(&name),
+                api::hex(&m.sha256),
+                m.size,
+                m.frames,
+                m.duration_ms,
+                esc(&m.map.iter().map(|&c| c as char).collect::<String>()),
+                g(&["serverdata", "fte_pext"]),
+                g(&["serverdata", "fte_pext2"]),
+                g(&["serverdata", "mvd_pext"]),
+                g(&["raw_path", "escapes"]),
+                g(&["truncated"]),
+                !m.demoinfo.is_empty(),
+                m.census.len()
+            );
+        } else {
+            let j = serde_json::json!({"file": name, "sha256": api::hex(&m.sha256), "demoinfo": !m.demoinfo.is_empty(), "census": census});
+            println!("{j}");
+        }
+    }
+}
+
+fn attach(argv: &[String]) {
+    let a = parse(&argv[2.min(argv.len())..]);
+    let sub = argv.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+    let file = a.files.first().unwrap_or_else(|| usage());
+    let path = std::path::Path::new(file);
+    match sub {
+        "add" => {
+            if a.files.len() != 3 {
+                usage();
+            }
+            let data = std::fs::read(&a.files[2]).unwrap_or_else(|e| die(e));
+            let att = api::Attachment {
+                name: a.files[1].clone(),
+                mime: a.mime.clone(),
+                kv: a.kv.clone(),
+                data,
+            };
+            api::update_attachments(path, &[], &[att]).unwrap_or_else(|e| die(e));
+        }
+        "ls" => {
+            let r = std::fs::File::open(path).unwrap_or_else(|e| die(e));
+            let prefix = a.files.get(1).map(|s| s.as_str()).unwrap_or("");
+            // names and values come from the file: printed escaped
+            let esc = |s: &str| s.escape_debug().to_string();
+            println!("name\tmime\tsize\tstored\tkeys");
+            for e in
+                api::list_attachments(std::io::BufReader::new(r), prefix).unwrap_or_else(|e| die(e))
+            {
+                let kv: Vec<String> =
+                    e.kv.iter()
+                        .map(|(k, v)| format!("{}={}", esc(k), esc(v)))
+                        .collect();
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    esc(&e.name),
+                    esc(&e.mime),
+                    e.size,
+                    e.stored,
+                    kv.join(",")
+                );
+            }
+        }
+        "extract" => {
+            if a.files.len() != 3 {
+                usage();
+            }
+            let r = std::fs::File::open(path).unwrap_or_else(|e| die(e));
+            let d = api::read_attachment(std::io::BufReader::new(r), &a.files[1])
+                .unwrap_or_else(|e| die(e));
+            write_output(&a.files[2], &d);
+        }
+        "export" => {
+            if a.files.len() != 2 {
+                usage();
+            }
+            let r = std::fs::File::open(path).unwrap_or_else(|e| die(e));
+            let sel = mvdz::Selection {
+                keep: a.keep.clone(),
+                keep_prefix: a.keep_prefix.clone(),
+                drop: a.drop.clone(),
+                drop_prefix: a.drop_prefix.clone(),
+            };
+            let mut out = Vec::new();
+            let h =
+                api::export_attachments(std::io::BufReader::new(r), &mut out, |e| sel.matches(e))
+                    .unwrap_or_else(|e| die(e));
+            write_output(&a.files[1], &out);
+            eprintln!("bundle_sha256 {}", api::hex(&h));
+        }
+        "rm" => {
+            let names: Vec<&str> = a.files[1..].iter().map(|s| s.as_str()).collect();
+            api::update_attachments(path, &names, &[]).unwrap_or_else(|e| die(e));
+        }
+        _ => usage(),
+    }
+}

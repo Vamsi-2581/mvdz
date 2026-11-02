@@ -1,0 +1,71 @@
+[package]
+name = "mvdz"
+version = "1.0.0-rc.1"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+description = "Lossless, format-aware compression of QuakeWorld MVD demos"
+repository = "https://github.com/galfthan/mvdz"
+homepage = "https://github.com/galfthan/mvdz"
+documentation = "https://github.com/galfthan/mvdz"
+readme = "README.md"
+keywords = ["quakeworld", "mvd", "demo", "compression", "rans"]
+categories = ["compression", "game-development", "command-line-utilities"]
+exclude = ["/fuzz", "/interop", "/scripts", "/.github"]
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+ruzstd = { version = "0.8", optional = true }
+libc = { version = "0.2", optional = true }
+
+# no default features: in particular not `legacy`, so libzstd refuses the
+# pre-RFC 8878 frame formats (v0.1-v0.7) exactly as ruzstd does
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+zstd = { version = "0.13", default-features = false }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+ruzstd = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+debug = 1
+
+# release code without LTO, for quick test and benchmark builds
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = 0
+
+[features]
+# decode zstd with the pure-Rust ruzstd crate (always on for wasm)
+pure-zstd = ["dep:ruzstd"]
+# the SIGPROF sampling profiler of the command-line tool (x86_64 Linux)
+sampler = ["dep:libc"]
+# force the portable (non-SIMD) code paths, to test the fallbacks used on
+# wasm32 and other targets
+scalar = []
+
+# Style lints the code deliberately does not follow: the C ABI's safety
+# contract is documented once, in include/mvdz.h; the hot loops (walker,
+# rANS, numeric groups, CRC) index several parallel arrays and keep their
+# written form, which was benchmarked.
+[lints.clippy]
+missing_safety_doc = "allow"
+needless_range_loop = "allow"
+collapsible_if = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+large_enum_variant = "allow"
+len_without_is_empty = "allow"
+precedence = "allow"
+manual_div_ceil = "allow"
+chunks_exact_to_as_chunks = "allow"
