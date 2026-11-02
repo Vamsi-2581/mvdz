@@ -18,6 +18,8 @@ pub enum Error {
     Io(std::io::ErrorKind),
     /// The encoder could not produce a file that decodes to its input.
     Internal(&'static str),
+    /// The input to compress is not an MVD demo (or is corrupt gzip).
+    NotMvd(&'static str),
 }
 
 impl std::fmt::Display for Error {
@@ -30,6 +32,7 @@ impl std::fmt::Display for Error {
             Error::NotFound => write!(f, "no such attachment"),
             Error::Io(k) => write!(f, "i/o: {k}"),
             Error::Internal(s) => write!(f, "internal: {s}"),
+            Error::NotMvd(s) => write!(f, "not an MVD demo: {s}"),
         }
     }
 }

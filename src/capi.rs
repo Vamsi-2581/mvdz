@@ -35,6 +35,7 @@ pub const MVDZ_E_IO: c_int = -4;
 pub const MVDZ_E_NOTFOUND: c_int = -5;
 pub const MVDZ_E_PANIC: c_int = -6;
 pub const MVDZ_E_LIMIT: c_int = -7;
+pub const MVDZ_E_NOTMVD: c_int = -8;
 
 /// Decode flag: trusted input, skip the SHA-256 identity check (the
 /// CRC-32C checks still run).
@@ -49,6 +50,7 @@ fn code(e: &Error) -> c_int {
         Error::NotFound => MVDZ_E_NOTFOUND,
         Error::Io(_) => MVDZ_E_IO,
         Error::Internal(_) => MVDZ_E_PANIC,
+        Error::NotMvd(_) => MVDZ_E_NOTMVD,
     }
 }
 
@@ -143,6 +145,7 @@ pub extern "C" fn mvdz_strerror(code: c_int) -> *const c_char {
         MVDZ_E_NOTFOUND => b"not found\0",
         MVDZ_E_PANIC => b"internal error\0",
         MVDZ_E_LIMIT => b"memory or work limit exceeded\0",
+        MVDZ_E_NOTMVD => b"input is not an MVD demo (or is corrupt gzip)\0",
         _ => b"unknown error\0",
     };
     s.as_ptr() as *const c_char

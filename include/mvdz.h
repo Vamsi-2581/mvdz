@@ -58,6 +58,7 @@ extern "C" {
 #define MVDZ_E_NOTFOUND -5  /* no attachment of that name */
 #define MVDZ_E_PANIC    -6  /* internal error */
 #define MVDZ_E_LIMIT    -7  /* memory or work limit exceeded */
+#define MVDZ_E_NOTMVD   -8  /* input to compress is not an MVD demo, or corrupt gzip */
 
 /* Decoding flags.
  * MVDZ_TRUSTED: the input is trusted (a cache that checked the demo's
@@ -93,7 +94,12 @@ void mvdz_free(void *ptr, size_t len);
 /* 1 if buf (at least 5 bytes) starts like an MVDZ file this library reads. */
 int mvdz_is_mvdz(const void *buf, size_t n);
 
-/* Whole-buffer operations. level: MVDZ_LEVEL_*. segment: raw bytes per
+/* Whole-buffer operations. mvdz_compress takes a raw .mvd or a
+ * gzip-compressed one (.mvd.gz, decompressed first, every member); the
+ * file holds the raw demo (its identity is the raw demo's SHA-256, and
+ * decoding gives the raw .mvd). Input that is not an MVD demo (empty, or
+ * no whole first frame that parses; see check_demo in the Rust API), and
+ * corrupt gzip, give MVDZ_E_NOTMVD. level: MVDZ_LEVEL_*. segment: raw bytes per
  * independently decodable segment, 0 = one segment (the default; note
  * that for mvdz_writer_open 0 means 1 MiB). A file holds at most 65536
  * segments: a smaller segment size than that allows is MVDZ_E_INVALID. */
@@ -204,7 +210,9 @@ int mvdz_attachments_export(mvdz_read_fn read, mvdz_seek_fn seek, void *user, mv
                             void *wuser, const mvdz_selection *sel, unsigned char bundle[32]);
 
 /* Streaming compression of a demo that is still being recorded: segments
- * are written as they fill, each one checked by decoding it first. A
+ * are written as they fill, each one checked by decoding it first. The
+ * writer takes raw MVD only: gzip data, a first frame that is not an MVD
+ * frame, or finishing with no data gives MVDZ_E_NOTMVD (sticky). A
  * write that would start segment 65537 fails with MVDZ_E_INVALID (use a
  * larger segment size).
  * finish writes the metadata, the index and the trailer and frees the
