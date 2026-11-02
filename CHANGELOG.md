@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+* C interface: `mvdz_writer_set_ext` sets extension metadata on a
+  streaming writer (Rust: `Writer::set_ext`). `mvdz_reader` and
+  `mvdz_writer` are distinct incomplete struct types instead of `void`
+  (same ABI; passing one for the other no longer compiles silently). The
+  header documents the static strings, the cost of `mvdz_writer_write`,
+  that finish and abort always free the handle, and threading.
+* Documentation: what reads `.mvdz` today, when to segment (`-s 1M`), a
+  FAQ, exact labels for the gzip and xz rows of the ratio table, the
+  benchmark sample lists (`benchmarks/samples/`), and when the fast level
+  can be smaller than normal.
+
 ## 1.0.0-rc.1
 
 First public release: a release candidate, for comments. The file format
