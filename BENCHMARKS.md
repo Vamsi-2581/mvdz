@@ -73,17 +73,21 @@ fast; 64 KiB segments: about +29 % on sample40).
 **By era** (year of the demo; byte-weighted, archive-weighted, 95 %
 intervals; the 9 demos before 2007 are merged into the first group):
 
-| era | n | normal | fast | median demo, normal (demos >= 60 s) | frames/s (median) | compressed B/s of game, normal (median) |
+| era | n | normal | fast | median demo, normal (demos >= 60 s) | snapshots/s (median) | compressed B/s of game, normal (median) |
 |---|---|---|---|---|---|---|
-| up to 2014 | 95 | 0.232 [0.225-0.238] | 0.274 [0.265-0.280] | 0.237 | 71 | 467 |
-| 2015-2022 | 124 | 0.241 [0.219-0.271] | 0.273 [0.249-0.304] | 0.241 | 73 | 682 |
-| 2023-2026 | 215 | 0.183 [0.178-0.188] | 0.209 [0.203-0.215] | 0.189 | 137 | 669 |
-| year unknown | 151 | 0.253 [0.248-0.258] | 0.292 [0.287-0.297] | 0.254 | 52 | 393 |
-| all | 585 | 0.211 [0.206-0.217] | 0.242 [0.237-0.249] | 0.230 | 78 | 599 |
+| up to 2014 | 95 | 0.232 [0.225-0.238] | 0.274 [0.265-0.280] | 0.237 | 26 | 467 |
+| 2015-2022 | 124 | 0.241 [0.219-0.271] | 0.273 [0.249-0.304] | 0.241 | 27 | 682 |
+| 2023-2026 | 215 | 0.183 [0.178-0.188] | 0.209 [0.203-0.215] | 0.189 | 62 | 669 |
+| year unknown | 151 | 0.253 [0.248-0.258] | 0.292 [0.287-0.297] | 0.254 | 19 | 393 |
+| all | 585 | 0.211 [0.206-0.217] | 0.242 [0.237-0.249] | 0.230 | - | 599 |
 
-Recent servers record at about 137 frames per second against about 72
-before, while the compressed bytes per second of game stay about flat
-(about 670 B/s from 2015 on), so the extra frames are nearly free.
+Snapshots/s counts the demo's time steps (blocks with a non-zero time
+delta; one server frame can write several blocks), as a median over 40
+demos per era. Current mvdsv records every server frame (`sv_demofps`
+defaults to 77; about 62 a second in practice), while older demos mostly
+hold 20-27. The compressed bytes per second of game stay about flat
+(about 670 B/s from 2015 on), so the extra snapshots are nearly free: the
+smaller time step makes each one easier to predict.
 
 ## Speeds
 
