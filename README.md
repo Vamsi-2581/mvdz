@@ -84,9 +84,9 @@ file. Method, samples, per-era ratios, more speeds and builds with
 
 MB = 10^6 bytes of raw demo. The whole archive would take about 23.7 GB
 at the normal level and 27.2 GB at the fast level. Recent demos (2023-26)
-compress to about 0.18: servers now record about 137 frames per second
-against about 72 before, at about the same compressed bytes per second of
-game. Every decode checks the CRC-32C of each segment and of the whole
+compress to about 0.18: current mvdsv records a snapshot every server
+frame (`sv_demofps 77`; about 62 a second in practice) where older demos
+mostly hold 20-27, at about the same compressed bytes per second of game. Every decode checks the CRC-32C of each segment and of the whole
 demo, and by default the SHA-256 identity (15-18 % of the decode time at
 the normal level, 26-30 % at the fast level); a cache that verified the
 identity once can decode with `--trusted`, about 1.2 to 1.4 times faster.
