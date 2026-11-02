@@ -1034,6 +1034,37 @@ pub unsafe extern "C" fn mvdz_writer_write(
     })
 }
 
+/// Sets an extension metadata key (UTF-8, NUL-terminated) to `n` bytes
+/// at `value`, replacing an earlier value of the key. A refused key leaves
+/// the writer as it was.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mvdz_writer_set_ext(
+    w: *mut MvdzWriter,
+    key: *const c_char,
+    value: *const c_void,
+    n: usize,
+) -> c_int {
+    guard(MVDZ_E_PANIC, || {
+        let (Some(k), Some(v)) = (unsafe { cstr(key) }, unsafe { slice(value, n) }) else {
+            return MVDZ_E_INVALID;
+        };
+        let Some(h) = lookup(w) else {
+            return MVDZ_E_INVALID;
+        };
+        let mut g = match lock(&h) {
+            Ok(g) => g,
+            Err(e) => return e,
+        };
+        match &mut *g.g {
+            Handle::W(WHandle(Some(wr))) => match wr.set_ext(&k, v) {
+                Ok(()) => MVDZ_OK,
+                Err(e) => code(&e),
+            },
+            _ => MVDZ_E_INVALID,
+        }
+    })
+}
+
 fn take_writer(w: *const c_void) -> Option<api::Writer<WCb>> {
     let h = lookup(w)?;
     let mut g = lock(&h).ok()?;
