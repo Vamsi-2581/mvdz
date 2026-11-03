@@ -1,6 +1,6 @@
 # MVDZ file format, version 1
 
-**Status: release candidate (1.0.0-rc.1), for comments.** The format may
+**Status: release candidate (1.0.0-rc.2), for comments.** The format may
 still change before 1.0: files written by a release candidate are not
 guaranteed to be readable by 1.0. The version byte stays 1.
 

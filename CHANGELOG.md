@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-rc.2
+
+No change to the file format: rc.1 files read unchanged, and rc.2 writes
+the same bytes as rc.1 for the same raw demo. The main changes: `.mvd.gz`
+is compressed directly, input that is not a demo is refused, and
+`compress` and `decompress` name their outputs after their inputs, like
+zstd (an existing output now needs `-f` to be overwritten).
 
 * Compression takes gzip input (`.mvd.gz`, every member) and decompresses
   it first, in the library, so the CLI, the C `mvdz_compress` and wasm all
@@ -39,6 +45,7 @@
   FAQ, exact labels for the gzip and xz rows of the ratio table, the
   benchmark sample lists (`benchmarks/samples/`), and when the fast level
   can be smaller than normal.
+* FORMAT.md: the META ordering rule is in §5.3, not §5.1 (#8).
 
 ## 1.0.0-rc.1
 
