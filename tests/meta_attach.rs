@@ -101,7 +101,10 @@ fn truncated_demo_round_trips_and_is_flagged() {
         );
     }
     if let Some(d) = duel() {
-        for cut in [1, 1000, 123_457, d.len() / 2 + 3, d.len() - 1] {
+        // one byte holds no frame: refused as a non-demo
+        let r = mvdz::compress(&d[..1], &cfg(Level::Normal, 65536));
+        assert!(matches!(r, Err(mvdz::Error::NotMvd(_))), "{r:?}");
+        for cut in [1000, 123_457, d.len() / 2 + 3, d.len() - 1] {
             let c = mvdz::compress(&d[..cut], &cfg(Level::Normal, 65536)).unwrap();
             assert_eq!(mvdz::decompress(&c, 2).unwrap(), &d[..cut], "cut {cut}");
         }
