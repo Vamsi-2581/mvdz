@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-rc.3
+
+The normal level codes five structural contexts as the spec meant them
+(0.15 % smaller), the fast level compresses about 6 times faster (zstd
+level 6; files about 5 % larger), and the release downloads use mimalloc
+(up to 40 % faster than with musl's allocator).
 
 **Format change.** Files written by rc.1 and rc.2 at the normal level do
 not decode with this version, and files written by it do not decode with
