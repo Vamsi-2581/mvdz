@@ -65,6 +65,7 @@ impl EncIO {
 impl SymIO for EncIO {
     #[inline(always)]
     fn byte(&mut self, sid: usize, ctx: u32, v: u8) -> u8 {
+        debug_assert!(ctx <= 0xffff, "stream {sid}: context {ctx:#x} over 16 bits");
         self.syms[sid].push(v);
         self.ctxs[sid].push(ctx);
         v
@@ -169,6 +170,7 @@ pub struct DecIO<'a, L> {
 impl<L: LazyCoder> SymIO for DecIO<'_, L> {
     #[inline(always)]
     fn byte(&mut self, sid: usize, ctx: u32, _: u8) -> u8 {
+        debug_assert!(ctx <= 0xffff, "stream {sid}: context {ctx:#x} over 16 bits");
         match self.lazy[sid].get(ctx) {
             Some(v) => v,
             None => {

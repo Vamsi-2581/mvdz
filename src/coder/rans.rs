@@ -1,9 +1,10 @@
 //! Tier F: two-pass static rANS with per-context frequency tables.
 //!
-//! * Symbols: bytes for structural streams (context = the walker's primary
-//!   context, low 16 bits), or the sign/bit-length bucket of a residual for
-//!   numeric streams (context from [`num_ctx`]); numeric mantissa bits go raw
-//!   into a separate bit stream (pcodec-style bins + offsets).
+//! * Symbols: bytes for structural streams (context = the walker's context,
+//!   which fits in 16 bits, the table key), or the sign/bit-length bucket of
+//!   a residual for numeric streams (context from [`num_ctx`]); numeric
+//!   mantissa bits go raw into a separate bit stream (pcodec-style bins +
+//!   offsets).
 //! * Tables: the encoder counts symbols per context and gives a context its
 //!   own table only where that beats the shared fallback table by more than
 //!   the table's cost. Counts are sent log-quantised (`steps` per octave)

@@ -18,7 +18,8 @@ use crate::streams::*;
 pub const NONE: u32 = u32::MAX;
 
 /// Structural symbol I/O. Encode: record and return `v`. Decode: return the
-/// decoded symbol (`v` is ignored).
+/// decoded symbol (`v` is ignored). Every `ctx` fits in 16 bits, the rans
+/// table key (FORMAT.md §8.3); both implementations debug-assert it.
 pub trait SymIO {
     fn byte(&mut self, sid: usize, ctx: u32, v: u8) -> u8;
     fn put_blob(&mut self, sid: usize, b: &[u8]);
@@ -615,11 +616,14 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
             if self.err {
                 return;
             }
-            let ctx = cmd_class(self.prev_cmd) as u32
-                | idx.min(15) << 4
-                | first_prev << 8
-                | (tyi as u32) << 12
-                | (self.prev_cmd as u32) << 16;
+            // Bit 15 splits the space: a known previous command is named by
+            // its class, an "other" one (class 15) by its own number.
+            let cl = cmd_class(self.prev_cmd) as u32;
+            let ctx = if cl == 15 {
+                0x8000 | self.prev_cmd as u32 | (tyi as u32) << 8 | idx.min(7) << 11
+            } else {
+                cl | idx.min(15) << 4 | first_prev << 8 | (tyi as u32) << 12
+            };
             idx += 1;
             if idx == 2 {
                 first = self.prev_cmd;
@@ -693,7 +697,7 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
                 let t = (self.target & 31) as usize;
                 let i = self.b8(
                     ST_IDX,
-                    self.st_prev_idx as u32 | (self.prev_cmd as u32) << 16,
+                    self.st_prev_idx as u32 | (self.prev_cmd as u32) << 8,
                 );
                 let prev = self.st[t][i as usize];
                 let v = self.r8(ST_VAL, i as u32 | (self.st_prev_val as u32) << 8, prev);
@@ -756,7 +760,9 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
     /// escape bit for "a rare bit changed" form one byte; only on escape do
     /// bits 6-9, 11-14 and then bit 15 follow.
     fn pi_flags(&mut self, prev: u16) -> u16 {
-        let cx = (prev & 0x3f) as u32 | ((prev >> 10) & 1) as u32 * 64 | (prev as u32) << 16;
+        // Bit 15 keeps the main symbol's contexts clear of b1's (0x100-0x1ff)
+        // and b2's (0x200); prev's own bit 15 is left out.
+        let cx = 0x8000 | (prev & 0x7fff) as u32;
         let x = if ENC {
             let lo = self.rd() as u16;
             let x = (lo | (self.rd() as u16) << 8) ^ prev;
@@ -790,18 +796,11 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
     }
 
     fn playerinfo(&mut self) {
-        let num = self.b8(
-            PI_NUM,
-            self.pi_prev_num as u32 | (self.prev_cmd as u32) << 16,
-        );
+        let num = self.b8(PI_NUM, self.pi_prev_num as u32);
         self.pi_prev_num = num;
         let ps = self.pl[num as usize];
         let flags = self.pi_flags(ps.flags);
-        let frame = self.r8(
-            PI_FRAME,
-            ps.frame as u32 | ((flags & 0x300) as u32) << 8,
-            ps.frame,
-        );
+        let frame = self.r8(PI_FRAME, ps.frame as u32 | (flags & 0x300) as u32, ps.frame);
         let cw = self.proto.coord();
         let nco = (flags & 7).count_ones() as usize;
         let nan = (flags & 0x38).count_ones() as usize;

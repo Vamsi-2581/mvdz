@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+**Format change.** Files written by rc.1 and rc.2 at the normal level do
+not decode with this version, and files written by it do not decode with
+rc.1 or rc.2. Such a file is refused by the integrity checks, not decoded
+wrongly: an rc.2 file is reported as `corrupt: structure` (the walk reads
+different symbols and the stream checks fail; any wrong output would also
+fail the segment CRC-32C). Fast-level and untransformed files (no rans
+streams) read unchanged. The version byte stays 1.
+
+* Five structural contexts kept information above bit 15, which the rans
+  back end drops (it keys tables by `ctx & 0xFFFF`, FORMAT.md §8.3). Every
+  structural context now fits in 16 bits, as coded:
+  * CMD: after a command of class 15 ("other"), the context names that
+    command, `0x8000 | prev_cmd | (tyi << 8) | (min(idx, 7) << 11)`;
+    before, every such command shared one context. Other classes keep the
+    old low 16 bits.
+  * ST_IDX: `st_prev_idx | (prev_cmd << 8)` (was `<< 16`, lost).
+  * PI_FLAGS: the main symbol's context is `0x8000 | (prev & 0x7fff)`, the
+    previous flags word (bit 15 aside); before, only 7 of its bits reached
+    the table.
+  * PI_FRAME: `ps.frame | (flags & 0x300)`, DF_DEAD and DF_GIB at bits 8-9
+    (were at 16-17, lost).
+  * PI_NUM: `pi_prev_num`; the `prev_cmd << 16` term was always lost and
+    carries no information here, so it is dropped (same tables).
+
+  On a 200-demo holdout (462 MB raw) the normal level is 148,128 bytes
+  (0.154 %) smaller: cmd -2.9 %, pi.flags -1.5 %, pi.frame -1.5 %, st.idx
+  -2.2 %. Decode speed is unchanged; the fast level is byte-identical.
+  The encoder and decoder debug-assert that every structural context fits
+  in 16 bits. FORMAT.md §6.5, §6.6, §6.7 and §6.12 give the new contexts
+  and their bit layouts; the Go conformance decoder and the test vectors
+  follow.
+
 ## 1.0.0-rc.2
 
 No change to the file format: rc.1 files read unchanged, and rc.2 writes

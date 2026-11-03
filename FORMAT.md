@@ -860,7 +860,11 @@ first_prev = cmd_class(first_by_ty[tyi])        // captured once, at payload sta
 first = 255
 loop:
     if error: return
-    ctx = cmd_class(prev_cmd) | (min(idx, 15) << 4) | (first_prev << 8) | (tyi << 12) | (prev_cmd << 16)
+    cl = cmd_class(prev_cmd)
+    if cl == 15:
+        ctx = 0x8000 | prev_cmd | (tyi << 8) | (min(idx, 7) << 11)
+    else:
+        ctx = cl | (min(idx, 15) << 4) | (first_prev << 8) | (tyi << 12)
     idx += 1
     if idx == 2: first = prev_cmd
     first_by_ty[tyi] = (idx >= 2) ? first : 255
@@ -877,6 +881,15 @@ for 255/0). The effect of the `first_by_ty` rule: after a payload with at
 least one command, `first_by_ty[tyi]` holds its first command; after an
 empty payload (immediate 255 or 0) it holds 255. `cmd_class(255) = 15`;
 initially `first_by_ty = 0` → class 0.
+
+The CMD context is 16 bits, split by bit 15. A previous command with a
+class of its own (0-14) is named by its class; an "other" one (class 15) by
+its own number, without `first_prev`:
+
+* `cl` 0-14: bits 0-3 `cl`, bits 4-7 `min(idx, 15)`, bits 8-11
+  `first_prev` (0-15), bits 12-14 `tyi` (0-7), bit 15 = 0: at most 0x7FFF.
+* `cl` = 15: bits 0-7 `prev_cmd`, bits 8-10 `tyi`, bits 11-13 `min(idx, 7)`,
+  bit 14 = 0, bit 15 = 1: 0x8000-0xBFFF.
 
 `cmd_class(c)` (`walk.rs:cmd_class`): 0→0, 42→1, 48→2, 47→3, 6→4, 23→5, 3→6,
 38→7, 8→8, 51→9, 14→10, 36→11, 9→12, 43→13, 54→13, 19→14, anything else→15.
@@ -906,7 +919,7 @@ symbols are residuals as defined in §6.
 |---|---|
 | 42 playerinfo | §6.7 |
 | 47, 48 packet entities | §6.8 (48 = delta) |
-| 3 updatestat | `t = target & 31`; `i = b8(ST_IDX, st_prev_idx | (prev_cmd << 16))`; `prev = st[t][i]`; `v = r8(ST_VAL, i | (st_prev_val << 8), prev)`; `st_prev_idx = i`; `st_prev_val = v - prev` (mod 256); `st[t][i] = v` |
+| 3 updatestat | `t = target & 31`; `i = b8(ST_IDX, st_prev_idx | (prev_cmd << 8))`; `prev = st[t][i]`; `v = r8(ST_VAL, i | (st_prev_val << 8), prev)`; `st_prev_idx = i`; `st_prev_val = v - prev` (mod 256); `st[t][i] = v` |
 | 38 updatestatlong | `t = target & 31`; `i = b8(STL_IDX, prev_cmd)`; `off = reserve(4)`; push `StlRec{off, key = (t << 8) | i}` |
 | 6 sound | §6.9 |
 | 23 temp entity | §6.10 |
@@ -924,10 +937,10 @@ the first); it is updated after `command()` returns.
 ### 6.7 playerinfo (svc 42) (`Walker::playerinfo`, `Walker::pi_flags`)
 
 ```
-num = b8(PI_NUM, pi_prev_num | (prev_cmd << 16)); pi_prev_num = num
+num = b8(PI_NUM, pi_prev_num); pi_prev_num = num
 ps = pl[num]
 flags = pi_flags(ps.flags)
-frame = r8(PI_FRAME, ps.frame | ((flags & 0x300) << 8), ps.frame)
+frame = r8(PI_FRAME, ps.frame | (flags & 0x300), ps.frame)   // DF_DEAD, DF_GIB at bits 8-9
 cw = proto.coord
 off = reserve(popcount(flags & 7) * cw + popcount(flags & 0x38) * 2)
 push PiRec{off, t, flags, num, fl = float_coords ? 1 : 0}
@@ -948,7 +961,7 @@ bytes each) followed by the angles (flag bits 3-5, always 2 bytes each);
 `pi_flags(prev)` — the 16-bit flags are coded as `x = flags XOR prev`:
 
 ```
-cx = (prev & 0x3f) | (((prev >> 10) & 1) * 64) | (prev << 16)
+cx = 0x8000 | (prev & 0x7fff)
 a  = symbol(PI_FLAGS, cx)
 x  = (a & 0x3f) | (((a >> 6) & 1) << 10)
 if a & 0x80:                                      // a rare bit changed
@@ -963,6 +976,10 @@ return flags
 (Symbol a: bits 0-5 = x bits 0-5, bit 6 = x bit 10, bit 7 = escape. b1: low
 nibble = x bits 6-9, high nibble = x bits 11-14. b2 = x bit 15; the encoder
 only emits 0/1, the decoder uses bit 0.)
+
+The three PI_FLAGS contexts do not overlap: `cx` is 0x8000-0xFFFF (bits
+0-14 = `prev` bits 0-14; `prev` bit 15 is not in the context), b1's is
+0x100-0x1FF and b2's 0x200.
 
 ### 6.8 Packet entities (svc 47, 48) (`Walker::packet_entities`, `Walker::entity_delta`)
 
@@ -1136,14 +1153,14 @@ is 0 or overruns the payload.)
 | TIME | `last_type | (last_tb << 8)` |
 | TYPE | `last_type | (min(tb,32) << 8)` |
 | MASK | `k << 14`, k = 0..3 |
-| CMD | §6.5 |
+| CMD | `cl | (min(idx,15) << 4) | (first_prev << 8) | (tyi << 12)`; for `cl` = 15, `0x8000 | prev_cmd | (tyi << 8) | (min(idx,7) << 11)` (§6.5) |
 | ESCLEN | `k` (0..4) |
 | HIDTAG | 0 |
 | HIDLEN, HIDTYPE | `k << 14` |
 | HIDDMG | `j | (k << 14)`, j = 0..3 block field, k = byte |
-| PI_NUM | `pi_prev_num | (prev_cmd << 16)` |
-| PI_FLAGS | `cx` (§6.7), `0x100 | ((prev >> 6) & 0xff)`, `0x200` |
-| PI_FRAME | `ps.frame | ((flags & 0x300) << 8)` |
+| PI_NUM | `pi_prev_num` |
+| PI_FLAGS | `cx = 0x8000 | (prev & 0x7fff)` (§6.7), `0x100 | ((prev >> 6) & 0xff)`, `0x200` |
+| PI_FRAME | `ps.frame | (flags & 0x300)` |
 | PI_MODEL, PI_SKIN, PI_EFF | 0 |
 | PI_WFRAME | `ps.wf` |
 | PE_HDR | 0 |
@@ -1154,7 +1171,7 @@ is 0 or overruns the payload.)
 | PE_FRAME | `model` |
 | PE_MISC | `model`, `model | 0x100`, `model | 0x200`, `0x3000`, `0x3001`, `0x3002`, `0x3003 | (k << 14)` |
 | PE_A | `i | (qa << 2) | (model << 6)`; wide: `3 | (model << 6) | (k << 14)` |
-| ST_IDX | `st_prev_idx | (prev_cmd << 16)` |
+| ST_IDX | `st_prev_idx | (prev_cmd << 8)` |
 | ST_VAL | `i | (st_prev_val << 8)` |
 | STL_IDX | `prev_cmd` |
 | SND_CH | `prev_cmd`; `0x100 | lo` |
@@ -1165,7 +1182,8 @@ is 0 or overruns the payload.)
 | PR_LEVEL | 0 |
 | FRAGS | `k << 14` |
 
-The rans back end uses `ctx & 0xFFFF` (§8.3); store and zstd ignore
+Every context in this table fits in 16 bits, so the rans back end's
+`ctx & 0xFFFF` (§8.3) changes none of them; store and zstd ignore
 contexts.
 
 ---
@@ -1557,7 +1575,8 @@ of `extra`: `ceil(bits_read / 8) == len(extra)` (at most 7 padding bits).
 #### Contexts and symbols
 
 * **Structural streams** (`ByteDec`): `ctx = walker_ctx & 0xFFFF`; the
-  symbol is the byte.
+  symbol is the byte. Every walker context fits in 16 bits (§6.12), so the
+  mask removes nothing.
 * **Numeric streams** (`NumDec`): `ctx = num_ctx(sid, f)`; the symbol is the
   bucket `b`; a decoded `b > 64` → error. Then
 
