@@ -28,8 +28,9 @@ mvdsv and ezQuake). Every field goes to its own stream; numeric fields
 (player and entity origins, view angles, sound and temp-entity
 coordinates) are coded as residuals against predictors. Each stream is then
 entropy-coded: static rANS with per-context tables at the **normal** level
-(the default), or zstd at the **fast** level. Anything that does not parse
-is stored raw, so any input round-trips.
+(the default), or zstd at the **fast** level (faster to compress and
+decode, larger). Anything that does not parse is stored raw, so any input
+round-trips.
 
 ## What reads .mvdz today?
 
@@ -71,7 +72,7 @@ normal level; [BENCHMARKS.md](BENCHMARKS.md)).
 ```
 mvdz compress game.mvd.gz                    # -> game.mvdz (normal level, one segment)
 mvdz compress *.mvd.gz                       # every file, several at once
-mvdz compress --fast -s 1M game.mvd          # faster decode, seekable segments
+mvdz compress --fast -s 1M game.mvd          # faster both ways, seekable segments
 mvdz decompress game.mvdz                    # -> game.mvd (--gzip: game.mvd.gz)
 mvdz info game.mvdz | jq .sha256             # metadata, without decoding
 ```
@@ -119,15 +120,21 @@ The gzip size is that of the archive's own files (level unknown; `gzip
 on 300 random demos). The decode speeds of those rows are for `gzip -6`
 and `xz -9` files on sample40.
 
+The table is for rc.2. Since then the fast level compresses its streams
+at zstd level 6 instead of 19, about 7 times faster, for files about 5 %
+larger (0.241 to 0.254 of raw on a 200-demo holdout); decoding is as fast.
+The normal level changed by under 0.1 %.
+
 MB = 10^6 bytes of raw demo. The whole archive would take about 23.7 GB
-at the normal level and 27.2 GB at the fast level. Recent demos (2023-26)
+at the normal level and 27.2 GB at the fast level (rc.2; about 28.7 GB at
+the fast level now). Recent demos (2023-26)
 compress to about 0.18: current mvdsv records a snapshot every server
 frame (`sv_demofps 77`; about 62 a second in practice) where older demos
 mostly hold 20-27, at about the same compressed bytes per second of game. Every decode checks the CRC-32C of each segment and of the whole
 demo, and by default the SHA-256 identity (15-18 % of the decode time at
 the normal level, 26-30 % at the fast level); a cache that verified the
 identity once can decode with `--trusted`, about 1.2 to 1.4 times faster.
-Compression runs at about 6 MB/s (normal) and 2.2 MB/s (fast) per thread,
+Compression runs at about 6 MB/s (normal) and 15 MB/s (fast) per thread,
 including a check that the output decodes to the input.
 
 ## Command line

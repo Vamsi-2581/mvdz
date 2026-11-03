@@ -34,6 +34,23 @@ streams) read unchanged. The version byte stays 1.
   and their bit layouts; the Go conformance decoder and the test vectors
   follow.
 
+* zstd levels (encoder only: files of every level read with existing
+  decoders). The fast level compresses its streams, untransformed segments
+  and META at zstd level 6 instead of 19, so it is fast both ways: on the
+  200-demo holdout, one thread, compression runs at 15.0 MB/s instead of
+  2.2, for a file 5.3 % larger (ratio 0.2535 instead of 0.2406); decoding
+  is as fast. The normal level uses 17 instead of 19 for its zstd streams,
+  untransformed segments and META: compression 6.2 MB/s instead of 5.5,
+  0.05 % larger. Attachments are compressed at level 1 first and stored
+  when that does not save more than 1/32; otherwise level 19 and the 1/16
+  rule as before. Already-compressed media no longer costs a level-19 pass
+  (about 0.2 s/MB). Data whose only redundancy is beyond level 1's window
+  (512 KiB) is now stored where level 19 would have compressed it. The
+  levels are `segment.rs:ZSTD_NORMAL`, `ZSTD_FAST`, `ZSTD_ATTACH_PROBE` and
+  `ZSTD_ATTACH` (FORMAT.md §12, rule 10); `Metadata::encode_for` takes the
+  level. The test vectors that hold zstd data at those levels are
+  regenerated.
+
 ## 1.0.0-rc.2
 
 No change to the file format: rc.1 files read unchanged, and rc.2 writes

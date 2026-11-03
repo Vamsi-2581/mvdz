@@ -32,8 +32,33 @@ pub enum Level {
     Fast,
 }
 
-/// zstd level for streams, segments and attachments.
-pub const ZSTD_LEVEL: i32 = 19;
+/// zstd level of the normal level's zstd streams, untransformed segments
+/// and META: 19 is 0.05 % smaller than 17 but about 10 % slower to
+/// compress, and no level changes decode speed.
+pub const ZSTD_NORMAL: i32 = 17;
+/// zstd level of the fast level's streams, untransformed segments and
+/// META, so that the fast level is fast both ways: about 15 MB/s to
+/// compress (2.2 at 19, 12.5 at 9) for a file about 5 % larger than at 19
+/// (0.7 % larger than at 9); decode speed is the same.
+pub const ZSTD_FAST: i32 = 6;
+/// zstd level of an attachment's probe: an attachment that does not shrink
+/// by 1/32 at this level is stored without trying `ZSTD_ATTACH` (opus
+/// voice at 19 costs about 0.2 s/MB and is then stored anyway).
+pub const ZSTD_ATTACH_PROBE: i32 = 1;
+/// zstd level of attachments that pass the probe: text such as analysis
+/// JSON is about 4 % smaller at 19 than at 17.
+pub const ZSTD_ATTACH: i32 = 19;
+
+impl Level {
+    /// The zstd level of this level's streams, untransformed segments and
+    /// META.
+    pub fn zstd(self) -> i32 {
+        match self {
+            Level::Normal => ZSTD_NORMAL,
+            Level::Fast => ZSTD_FAST,
+        }
+    }
+}
 
 /// Per-stream statistics for reporting.
 #[derive(Clone, Debug, Default)]
@@ -337,11 +362,19 @@ fn candidates(level: Level, kind: Kind) -> &'static [u8] {
     }
 }
 
-fn pack_one(kind: Kind, be: u8, sid: usize, wk: &Walked, num: &[(NCtx, i32)]) -> Option<Vec<u8>> {
+fn pack_one(
+    kind: Kind,
+    be: u8,
+    sid: usize,
+    level: Level,
+    wk: &Walked,
+    num: &[(NCtx, i32)],
+) -> Option<Vec<u8>> {
+    let z = level.zstd();
     match kind {
-        Kind::Lazy => coder::encode_lazy(be, &wk.io.syms[sid], &wk.io.ctxs[sid], ZSTD_LEVEL),
-        Kind::Num => coder::encode_num(be, sid, num, ZSTD_LEVEL),
-        Kind::Blob => coder::encode_blob(be, &wk.io.blobs[sid], ZSTD_LEVEL),
+        Kind::Lazy => coder::encode_lazy(be, &wk.io.syms[sid], &wk.io.ctxs[sid], z),
+        Kind::Num => coder::encode_num(be, sid, num, z),
+        Kind::Blob => coder::encode_blob(be, &wk.io.blobs[sid], z),
     }
 }
 
@@ -362,7 +395,7 @@ fn pack_best(
     ] {
         let mut best: Option<(u8, Vec<u8>)> = None;
         for &be in list {
-            if let Some(c) = pack_one(kind, be, sid, wk, num) {
+            if let Some(c) = pack_one(kind, be, sid, level, wk, num) {
                 if best.as_ref().is_none_or(|b| c.len() < b.1.len()) {
                     best = Some((be, c));
                 }

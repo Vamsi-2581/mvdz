@@ -6,7 +6,7 @@ use crate::decode::{SliceSrc, decode_segment, scan_layout};
 use crate::error::{Error, Result};
 use crate::format::*;
 use crate::proto::Proto;
-use crate::segment::{self, Level, StreamStat, Walked, ZSTD_LEVEL, cut_points, frame_scan};
+use crate::segment::{self, Level, StreamStat, Walked, cut_points, frame_scan};
 use crate::util::{crc32, par_map};
 
 /// Compression settings.
@@ -96,9 +96,9 @@ pub fn walk_one(s: &[u8], proto: &mut Proto, dinfo_total: &mut usize) -> Option<
 
 /// The SEGMENT section body of a segment stored without the transform:
 /// zstd when the ratio limit allows it and it is smaller, else stored.
-pub fn raw_body(s: &[u8], raw_off: u64, t_start: u64) -> Vec<u8> {
+pub fn raw_body(s: &[u8], level: Level, raw_off: u64, t_start: u64) -> Vec<u8> {
     let crc = crc32(s);
-    let z = crate::zst::compress(s, ZSTD_LEVEL);
+    let z = crate::zst::compress(s, level.zstd());
     let mut b = seg_hdr_bytes(raw_off, s.len() as u64, t_start, crc, C_ZSTD);
     if z.len() < s.len() && seg_ratio_ok(s.len() as u64, (b.len() + z.len()) as u64) {
         b.extend_from_slice(&z);
@@ -228,7 +228,7 @@ fn assemble(
             }
         }
         (
-            raw_body(s, cuts[i] as u64, plans[i].t_start),
+            raw_body(s, level, cuts[i] as u64, plans[i].t_start),
             true,
             Vec::new(),
         )
@@ -245,7 +245,7 @@ fn assemble(
         return assemble(src, cuts, plans, &raw2, md0, level, outer, inner);
     }
     let mut out = prefix(0, PREFIX_LEN as u64);
-    section(&mut out, K_META, &md.encode()?);
+    section(&mut out, K_META, &md.encode_for(level)?);
     let mut index = Index {
         size: src.len() as u64,
         crc: crc32(src),

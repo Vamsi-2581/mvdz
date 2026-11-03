@@ -41,8 +41,8 @@ output, as is -o. compress takes gzip input (.mvd.gz), decompressed first;
 input that is not an MVD demo is refused (--allow-non-demo stores it anyway).
 decompress --gzip writes the demo gzip-compressed (the default for an output
 named *.gz; --no-gzip writes it raw). Sizes take K, M, G suffixes
-(binary: 1M = 1048576). --fast selects per-stream zstd: faster to decode,
-slower to compress, larger (default: normal).
+(binary: 1M = 1048576). --fast selects per-stream zstd: faster to compress
+and decode, larger (default: normal).
 -s cuts the demo into independently decodable segments (default: one,
 which cannot seek; -s 1M for files that will be played or served).
 --trusted skips the SHA-256 identity check (CRC-32C checks only): only for

@@ -275,8 +275,13 @@ impl Metadata {
         }
     }
 
-    /// The META section body.
+    /// The META section body, zstd at the normal level's setting.
     pub fn encode(&self) -> Result<Vec<u8>> {
+        self.encode_for(crate::segment::Level::Normal)
+    }
+
+    /// The META section body, zstd at `level`'s setting (as its streams).
+    pub fn encode_for(&self, level: crate::segment::Level) -> Result<Vec<u8>> {
         check_ext(&self.ext)?;
         let mut p = Vec::new();
         let mut field = |tag: u64, v: &[u8]| {
@@ -344,7 +349,7 @@ impl Metadata {
         }
         // section body: meta version, codec, raw length, CRC-32C, payload;
         // zstd only when smaller and within the ratio limit
-        let z = crate::zst::compress(&p, crate::segment::ZSTD_LEVEL);
+        let z = crate::zst::compress(&p, level.zstd());
         let mut out = vec![1u8, 0];
         put_uv(&mut out, p.len() as u64);
         out.extend_from_slice(&crc32(&p).to_le_bytes());
@@ -783,15 +788,17 @@ pub fn parse_adir(b: &[u8]) -> Result<Vec<AttachInfo>> {
 }
 
 /// Stored body of an attachment: zstd when it saves at least 1/16 (and the
-/// ratio limit allows it), else as is.
+/// ratio limit allows it), else as is. Data that zstd level 1 does not
+/// shrink by 1/32 is stored without the slow level.
 pub fn pack_attachment(a: &Attachment, off: u64) -> (AttachInfo, Vec<u8>) {
+    use crate::segment::{ZSTD_ATTACH, ZSTD_ATTACH_PROBE};
     let sha256: [u8; 32] = Sha256::digest(&a.data).into();
-    let z = crate::zst::compress(&a.data, crate::segment::ZSTD_LEVEL);
-    let fits = ratio_ok(a.data.len() as u64, z.len() as u64);
-    let (codec, body) = if fits && z.len() + a.data.len() / 16 < a.data.len() {
-        (A_ZSTD, z)
-    } else {
-        (A_STORE, a.data.clone())
+    let n = a.data.len();
+    let probe = crate::zst::compress(&a.data, ZSTD_ATTACH_PROBE);
+    let z = (probe.len() + n / 32 < n).then(|| crate::zst::compress(&a.data, ZSTD_ATTACH));
+    let (codec, body) = match z {
+        Some(z) if ratio_ok(n as u64, z.len() as u64) && z.len() + n / 16 < n => (A_ZSTD, z),
+        _ => (A_STORE, a.data.clone()),
     };
     let info = AttachInfo {
         name: a.name.clone(),

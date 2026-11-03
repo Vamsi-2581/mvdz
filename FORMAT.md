@@ -1741,7 +1741,9 @@ read attachment bodies to skip them.
 
 **Writing.** The reference stores data as zstd (level 19) when that saves
 at least 1/16 of it and keeps within the ratio limit, else stored; so
-already-compressed media (Opus, PNG) is stored as is.
+already-compressed media (Opus, PNG) is stored as is. Data that zstd level 1
+does not shrink by more than 1/32 is stored without trying level 19 (§12,
+rule 10).
 
 **Updating.** Adding, replacing or removing attachments rewrites only the
 part after `body_end`: the new file is `file[0 .. body_end]`, one ATTACH
@@ -1880,7 +1882,8 @@ complete segments, then an error. Errors are sticky.
 
 These are what the reference encoder does; a decoder does not depend on
 them, but the test vectors are reproduced byte for byte only by an encoder
-that follows them (the vectors also depend on libzstd 1.5.7 at level 19).
+that follows them (the vectors also depend on libzstd 1.5.7 at the levels
+of rule 10).
 
 1. **Cut points** (`segment.rs:cut_points`): with segment size S = 0 the
    whole demo is one segment. Otherwise walk the frames from the start
@@ -1921,6 +1924,12 @@ that follows them (the vectors also depend on libzstd 1.5.7 at level 19).
    would exceed 2^24 bytes.
 9. **Determinism**: the output depends only on the input, the level, the
    segment size and the extension metadata: not on the thread count.
+10. **zstd levels** (`segment.rs:ZSTD_*`): every zstd stream, untransformed
+    segment and META is compressed at level 17 at the normal level and 6
+    at the fast level. An attachment is first compressed at level 1; if
+    that does not save more than 1/32 of it, it is stored; otherwise it is
+    compressed at level 19 and the §10 rule applies. A decoder does not
+    depend on any of this: every zstd level reads the same.
 
 ---------------------------------------------------------------------------
 

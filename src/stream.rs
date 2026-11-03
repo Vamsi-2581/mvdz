@@ -203,7 +203,7 @@ impl<W: Write> StreamEncoder<W> {
             }
             None => {
                 share = &[];
-                raw_body(seg, self.raw, t_start)
+                raw_body(seg, self.cfg.level, self.raw, t_start)
             }
         };
         let e = IndexSeg {
@@ -256,7 +256,7 @@ impl<W: Write> StreamEncoder<W> {
             let scan = std::mem::take(&mut s.scan).finish();
             let mut md = Metadata::from_scan(scan, std::mem::take(&mut s.cfg.ext));
             md.demoinfo = std::mem::take(&mut s.dinfo);
-            let meta_off = s.put(K_META, &md.encode()?)?;
+            let meta_off = s.put(K_META, &md.encode_for(s.cfg.level)?)?;
             for (b, e) in std::mem::take(&mut s.held) {
                 let off = s.put(K_SEGMENT, &b)?;
                 s.index.segs.push(IndexSeg { off, ..e });

@@ -6,6 +6,22 @@ this repository unless stated. MB = 10^6 bytes of **raw demo**; speeds are
 MB/s of raw demo, so a codec's speed does not depend on how well it
 compresses.
 
+**These figures are for 1.0.0-rc.2**, which used zstd level 19 everywhere.
+The encoder now uses level 17 at the normal level and level 6 at the fast
+level (attachments: level 19 after a level-1 probe). That changes only
+encode time and size; every level decodes the same. On the 200-demo
+holdout (462 MB raw), one thread, against the same code at level 19
+(load average 1.5-3):
+
+| level | ratio, rc.2 levels | ratio, now | compress 1t, rc.2 levels | compress 1t, now | decode 1t |
+|---|---|---|---|---|---|
+| normal | 0.2081 | 0.2082 | 5.50 [5.48-5.67] | 6.17 [6.03-6.19] | 28.4 / 27.5 |
+| fast | 0.2406 | 0.2535 | 2.18 [2.11-2.18] | 15.00 [14.67-15.22] | 46.7 / 47.4 |
+
+So the fast-level ratios and compress speeds below are those of rc.2: the
+fast level is now about 5 % larger and about 7 times faster to compress.
+The normal-level figures change by under 0.1 % in size.
+
 ## Machine
 
 A cloud VM: 4 vCPUs of an Intel Xeon (Skylake, AVX2, no SHA extensions),
