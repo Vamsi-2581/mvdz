@@ -15,7 +15,7 @@ write an independent decoder; [`interop/specdec`](interop/specdec) is one,
 in Go, written from the specification as a conformance check, and
 `tests/vectors/` holds valid and hostile test files.
 
-**Status: 1.0.0-rc.2, a release candidate for comments.** The file format
+**Status: 1.0.0-rc.3, a release candidate for comments.** The file format
 may still change before 1.0: files written by a release candidate are not
 guaranteed to be readable by 1.0, so keep the original `.mvd` files for
 now. Later additions after 1.0 will use the forward-compatible extension
