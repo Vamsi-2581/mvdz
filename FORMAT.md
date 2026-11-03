@@ -1,6 +1,6 @@
 # MVDZ file format, version 1
 
-**Status: release candidate (1.0.0-rc.1), for comments.** The format may
+**Status: release candidate (1.0.0-rc.2), for comments.** The format may
 still change before 1.0: files written by a release candidate are not
 guaranteed to be readable by 1.0. The version byte stays 1.
 
@@ -150,7 +150,7 @@ not know, without reading its body.
 **Order.** A file has two parts:
 
 * the *demo part*: META, the SEGMENT sections in demo order, then INDEX
-  (META may come before, between or after segments; §5.1 says when it must
+  (META may come before, between or after segments; §5.3 says when it must
   come first);
 * the *attachment part*, from the first ATTACH or ADIR section on: ATTACH
   sections, then the ADIR.
