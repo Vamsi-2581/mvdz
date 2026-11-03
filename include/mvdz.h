@@ -18,7 +18,9 @@
  *    serialised internally, so a handle may be passed between threads
  *    (calls from several threads at once wait for each other). Different
  *    handles work independently. A handle whose call hit an internal error
- *    (MVDZ_E_PANIC) fails every later call with MVDZ_E_PANIC; close it.
+ *    (MVDZ_E_PANIC) fails every later call with MVDZ_E_PANIC; close it
+ *    (mvdz_close for a reader; mvdz_writer_finish or mvdz_writer_abort,
+ *    which return MVDZ_E_PANIC and free it, for a writer).
  *  - Callbacks are called only from the thread that is inside an mvdz_*
  *    call, and only during that call. They must return normally: they must
  *    not longjmp (as Quake's Sys_Error / Host_Error do) or throw a C++
