@@ -50,6 +50,19 @@ streams) read unchanged. The version byte stays 1.
   `ZSTD_ATTACH` (FORMAT.md §12, rule 10); `Metadata::encode_for` takes the
   level. The test vectors that hold zstd data at those levels are
   regenerated.
+* The release downloads use mimalloc as the allocator (new cargo feature
+  `mimalloc`, off by default; the release workflow turns it on). musl's
+  own allocator made the static builds 15-40 % slower than a glibc build,
+  and multi-threaded decoding barely faster than one thread; with mimalloc
+  the baseline download decodes the normal level at 27 MB/s on one thread
+  (was 23) and 34 MB/s on four (was 24).
+* BENCHMARKS.md is re-measured for this version: the ratios on the
+  stratified sample (fast level now 0.255 of raw, 28.6 GB for the
+  archive), and every speed on 8 demos, 5 interleaved rounds per build,
+  for the release downloads and the glibc builds.
+* Test: `truncated_demo_round_trips_and_is_flagged` expects a one-byte cut
+  to be refused as a non-demo (since rc.2); it failed when run with
+  `MVDZ_TEST_DATA`.
 
 ## 1.0.0-rc.2
 
