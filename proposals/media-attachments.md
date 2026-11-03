@@ -43,8 +43,8 @@ were absent.
 | key | value | meaning |
 |---|---|---|
 | `role` | open vocabulary, non-empty | what the attachment is: `voice`, `commentary`, `transcript`, `analysis`, `screenshot`, `sidecar`, or another value |
-| `time_offset_ms` | signed decimal | the demo time (ms, §3) at which the attachment's own time 0 falls: demo time = attachment time + `time_offset_ms` |
-| `time_map` | JSON (§3) | a piecewise-linear map from media time to demo time; wins over `time_offset_ms` |
+| `time_offset_ms` | signed decimal | the demo time (ms, FORMAT.md §4) at which the attachment's own time 0 falls: demo time = attachment time + `time_offset_ms` |
+| `time_map` | JSON (§3 below) | a piecewise-linear map from media time to demo time; wins over `time_offset_ms` |
 | `wallclock_start_ms` | decimal | the Unix ms at which the media starts (e.g. a VOD's reported start), for a coarse sync through FORMAT.md §3.1; used only without `time_map` and `time_offset_ms` |
 | `player` | string | the player's name as written in the demo (Latin-1 code points) |
 | `slot` | decimal 0-255 | the player's slot (svc_playerinfo number) |
@@ -54,7 +54,7 @@ were absent.
 | `ref` | an attachment name of the same file | the attachment this one belongs to (a transcript names the voice or commentary track it transcribes). Writers refuse a new attachment whose `ref` names nothing; removing or not exporting the attachment it names leaves the `ref` dangling, which readers treat as absent |
 | `source` | string | provenance: where the attachment came from; for a voice or commentary track the URL of the original recording (e.g. a VOD link), so the speaker can be credited and linked |
 | `created` | RFC 3339 timestamp | when the attachment was made |
-| `visibility` | `public`, `team` or `private` | who may see it (§3). **Advisory**: mvdz has no encryption or access control, and anyone holding the file can list and extract every attachment. The label takes effect only where a server holds the full file and serves filtered copies (FORMAT.md §10, Exporting). Typical uses: an embargo (the uploader sets `public` later with an ordinary update) and a statement of the uploader's intent for tools and mirrors |
+| `visibility` | `public`, `team` or `private` | who may see it (§3 below). **Advisory**: mvdz has no encryption or access control, and anyone holding the file can list and extract every attachment. The label takes effect only where a server holds the full file and serves filtered copies (FORMAT.md §10, Exporting). Typical uses: an embargo (the uploader sets `public` later with an ordinary update) and a statement of the uploader's intent for tools and mirrors |
 
 `created` is `YYYY-MM-DDTHH:MM:SS[.frac]` and `Z` or `±HH:MM`.
 
@@ -167,7 +167,7 @@ of that team in this demo (the `team` key, else the team of the player in
 | `voice` | `audio/ogg; codecs=opus` | a player's or team channel's voice (above) |
 | `commentary` | `audio/ogg; codecs=opus` | a caster's commentary (above) |
 | `transcript` | `text/vtt` | a transcript of a voice or commentary track (above) |
-| `analysis` | a vendor MIME type, e.g. `application/vnd.mvda.result+json` | an analysis result of the mvd-analyzer project, zstd-compressed (codec 1); its schema is owned by that project, not by mvdz; several versions may coexist under different names |
+| `analysis` | a vendor MIME type, e.g. `application/vnd.mvda.result+json` | an analysis result of the [mvd-analyzer](https://github.com/galfthan/mvd_analyzer) project, zstd-compressed (codec 1); its schema is owned by that project, not by mvdz; several versions may coexist under different names |
 
 Producers of other data use their own vendor MIME types and schemas.
 
@@ -184,7 +184,7 @@ with an ordinary attachment update), and a statement of the uploader's
 intent for tools and mirrors.
 
 The draft implementation (removed before 1.0) had `is_public(entry,
-directory)` implementing the privacy rule of §3, and an export selection
+directory)` implementing the privacy rule of §3 below, and an export selection
 `--public` (keep what `is_public` allows) and `--role r` (keep these
 roles), combined with the name filters so that every given condition
 must hold.
@@ -195,7 +195,7 @@ The draft writer refused malformed values of these keys: decimals as
 defined in §2, `slot` 0-255, `visibility` one of the three values, `lang`
 as subtags of 1-8 ASCII letters or digits joined by `-` (at most 35
 bytes), `created` as `YYYY-MM-DDTHH:MM:SS[.frac]` with `Z` or `±HH:MM`,
-`time_map` as in §3, and a new attachment whose `ref` names no attachment
+`time_map` as in §3 below, and a new attachment whose `ref` names no attachment
 of the resulting file. Readers would ignore a malformed value, as if the
 key were absent.
 
@@ -209,7 +209,7 @@ key were absent.
    mapping (demo time to media time, needed by players that seek by demo
    time) be normative as written, and how should an invalid map degrade?
 4. Media time origin for Ogg Opus (granule position minus pre-skip) and
-   for streams cut from a live source: is the rule in §3 what players
+   for streams cut from a live source: is the rule in §3 below what players
    (ezQuake, FTE, web players) can implement?
 5. Privacy default: private unless the role is commentary (or a public
    transcript, or a non-audio analysis): too strict, too loose? What
