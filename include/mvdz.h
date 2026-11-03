@@ -150,7 +150,7 @@ void mvdz_close(mvdz_reader *r);
  * full decode (and reading each attachment) verifies them. *json_n
  * excludes the NUL; free with mvdz_free(json, *json_n). Byte strings are
  * rendered as Latin-1 (each byte is the code point of the same value).
- * Attachments are listed under "attachments" (name, mime, size, kv). The
+ * Attachments are listed under "attachments" (name, mime, size, stored, sha256, kv). The
  * JSON counts against max_memory. */
 int mvdz_info_json(mvdz_read_fn read, mvdz_seek_fn seek, void *user, uint64_t max_memory, char **json,
                    size_t *json_n);
