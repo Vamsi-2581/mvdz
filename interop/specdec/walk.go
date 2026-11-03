@@ -317,7 +317,12 @@ func (w *Walker) payload(ty uint8) {
 	firstPrev := cmdClass(w.firstByTy[tyi])
 	first := uint8(255)
 	for {
-		ctx := uint32(cmdClass(w.prevCmd)) | min(idx, 15)<<4 | uint32(firstPrev)<<8 | uint32(tyi)<<12 | uint32(w.prevCmd)<<16
+		var ctx uint32
+		if cl := uint32(cmdClass(w.prevCmd)); cl == 15 {
+			ctx = 0x8000 | uint32(w.prevCmd) | uint32(tyi)<<8 | min(idx, 7)<<11
+		} else {
+			ctx = cl | min(idx, 15)<<4 | uint32(firstPrev)<<8 | uint32(tyi)<<12
+		}
 		idx++
 		if idx == 2 {
 			first = w.prevCmd
@@ -364,7 +369,7 @@ func (w *Walker) command(cmd uint8) {
 		w.packetEntities(cmd)
 	case 3:
 		t := w.target & 31
-		ictx := uint32(w.stPrevIdx) | uint32(w.prevCmd)<<16
+		ictx := uint32(w.stPrevIdx) | uint32(w.prevCmd)<<8
 		i := w.b8(sSTIDX, ictx)
 		prev := w.st[t][i]
 		v := w.r8(sSTVAL, uint32(i)|uint32(w.stPrevVal)<<8, prev)
@@ -410,11 +415,11 @@ func popc(x uint32) int {
 }
 
 func (w *Walker) playerinfo() {
-	num := w.b8(sPINUM, uint32(w.piPrevNum)|uint32(w.prevCmd)<<16)
+	num := w.b8(sPINUM, uint32(w.piPrevNum))
 	w.piPrevNum = num
 	ps := w.pl[num]
 	flags := w.piFlags_(ps.flags)
-	frame := w.r8(sPIFRAME, uint32(ps.frame)|(uint32(flags)&0x300)<<8, ps.frame)
+	frame := w.r8(sPIFRAME, uint32(ps.frame)|uint32(flags)&0x300, ps.frame)
 	cw := w.proto.coord
 	off := w.reserve(popc(uint32(flags)&7)*cw + popc(uint32(flags)&0x38)*2)
 	fl := uint8(0)
@@ -447,7 +452,7 @@ func (w *Walker) playerinfo() {
 
 func (w *Walker) piFlags_(prev uint16) uint16 {
 	pv := uint32(prev)
-	cx := (pv & 0x3f) | ((pv>>10)&1)*64 | pv<<16
+	cx := 0x8000 | pv&0x7fff
 	a := uint32(w.sym(sPIFLAGS, cx))
 	x := (a & 0x3f) | ((a>>6)&1)<<10
 	if a&0x80 != 0 {

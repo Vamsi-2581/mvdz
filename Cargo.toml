@@ -30,6 +30,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # pre-RFC 8878 frame formats (v0.1-v0.7) exactly as ruzstd does
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 zstd = { version = "0.13", default-features = false }
+mimalloc = { version = "0.1", optional = true, default-features = false }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 ruzstd = "0.8"
@@ -53,6 +54,9 @@ debug = 0
 pure-zstd = ["dep:ruzstd"]
 # the SIGPROF sampling profiler of the command-line tool (x86_64 Linux)
 sampler = ["dep:libc"]
+# mimalloc as the command-line tool's allocator: musl's own allocator makes
+# the static release builds 15-40 % slower (BENCHMARKS.md)
+mimalloc = ["dep:mimalloc"]
 # force the portable (non-SIMD) code paths, to test the fallbacks used on
 # wasm32 and other targets
 scalar = []

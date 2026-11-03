@@ -81,7 +81,7 @@ extern "C" {
 
 /* Compression levels. */
 #define MVDZ_LEVEL_NORMAL 0  /* static rANS (default) */
-#define MVDZ_LEVEL_FAST   1  /* per-stream zstd: larger, faster to decode */
+#define MVDZ_LEVEL_FAST   1  /* per-stream zstd: larger, faster to compress and decode */
 
 /* Callbacks for reading through the engine's own VFS.
  * read: fill buf with up to n bytes; return the count, 0 at end of file,

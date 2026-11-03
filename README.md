@@ -28,8 +28,9 @@ mvdsv and ezQuake). Every field goes to its own stream; numeric fields
 (player and entity origins, view angles, sound and temp-entity
 coordinates) are coded as residuals against predictors. Each stream is then
 entropy-coded: static rANS with per-context tables at the **normal** level
-(the default), or zstd at the **fast** level. Anything that does not parse
-is stored raw, so any input round-trips.
+(the default), or zstd at the **fast** level (faster to compress and
+decode, larger). Anything that does not parse is stored raw, so any input
+round-trips.
 
 ## What reads .mvdz today?
 
@@ -63,15 +64,17 @@ cargo install --path .           # or: put mvdz on your PATH
 
 The default build runs on any CPU of its architecture. Building for the
 machine you run on, with `RUSTFLAGS="-C target-cpu=native" cargo build
---release`, is faster on x86-64 CPUs with AVX2 (up to about 15 % at the
-normal level; [BENCHMARKS.md](BENCHMARKS.md)).
+--release`, is faster on x86-64 CPUs with AVX2 (about 10-15 % at the
+normal level; [BENCHMARKS.md](BENCHMARKS.md)). The release downloads are
+static musl builds with mimalloc (`--features mimalloc`): musl's own
+allocator would cost them 15-40 %.
 
 ## Quickstart
 
 ```
 mvdz compress game.mvd.gz                    # -> game.mvdz (normal level, one segment)
 mvdz compress *.mvd.gz                       # every file, several at once
-mvdz compress --fast -s 1M game.mvd          # faster decode, seekable segments
+mvdz compress --fast -s 1M game.mvd          # faster both ways, seekable segments
 mvdz decompress game.mvdz                    # -> game.mvd (--gzip: game.mvd.gz)
 mvdz info game.mvdz | jq .sha256             # metadata, without decoding
 ```
@@ -101,33 +104,34 @@ either to get the other behaviour.
 
 Sizes: on a 72 GB archive of gzip-compressed demos (about 112 GB raw),
 measured on an independent stratified sample of 585 demos, with 95 %
-intervals. Speeds: the default (portable) release build, one core of a
-4-core x86-64 VM, on 40 demos (sample40, 140 MB raw), CLI one process per
-file. Method, samples, per-era ratios, more speeds and builds with
-`-C target-cpu=native` (faster) are in [BENCHMARKS.md](BENCHMARKS.md).
+intervals. Speeds: the release download (baseline x86-64), one core of a
+4-vCPU x86-64 VM (Skylake Xeon), on 8 demos (18.9 MB raw), CLI one process
+per file. Method, samples, per-era ratios, more speeds and the other
+builds (the `-v3` download is 10-20 % faster) are in
+[BENCHMARKS.md](BENCHMARKS.md).
 
 | format | size / raw | decode, CLI, 1 process | decode, library, 1 thread |
 |---|---|---|---|
-| mvdz normal | 0.211 [0.206-0.217] | 23 MB/s | 29 MB/s |
-| mvdz fast | 0.242 [0.237-0.249] | 35 MB/s | 47 MB/s |
-| gzip (the archive's files) | 0.64 | 88 MB/s | |
-| xz -9e | 0.47 | 28 MB/s | |
-| zstd -19 | 0.55 | 118 MB/s | |
+| mvdz normal | 0.211 [0.206-0.216] | 22 MB/s | 27 MB/s |
+| mvdz fast | 0.255 [0.250-0.261] | 34 MB/s | 44 MB/s |
+| gzip (the archive's files) | 0.64 | 79 MB/s | |
+| xz -9e | 0.47 | 27 MB/s | |
+| zstd -19 | 0.55 | 104 MB/s | |
 
 The gzip size is that of the archive's own files (level unknown; `gzip
--6` gives 0.634 on sample40), and the xz size is `xz -9e` (`xz -9`: 0.468
-on 300 random demos). The decode speeds of those rows are for `gzip -6`
-and `xz -9` files on sample40.
+-6` gives 0.611 on the 8 demos), and the xz size is `xz -9e` (`xz -9`:
+0.468 on 300 random demos). The decode speeds of those rows are for `gzip
+-6`, `xz -9` and `zstd -19` files of the 8 demos.
 
 MB = 10^6 bytes of raw demo. The whole archive would take about 23.7 GB
-at the normal level and 27.2 GB at the fast level. Recent demos (2023-26)
+at the normal level and 28.6 GB at the fast level. Recent demos (2023-26)
 compress to about 0.18: current mvdsv records a snapshot every server
 frame (`sv_demofps 77`; about 62 a second in practice) where older demos
 mostly hold 20-27, at about the same compressed bytes per second of game. Every decode checks the CRC-32C of each segment and of the whole
-demo, and by default the SHA-256 identity (15-18 % of the decode time at
-the normal level, 26-30 % at the fast level); a cache that verified the
-identity once can decode with `--trusted`, about 1.2 to 1.4 times faster.
-Compression runs at about 6 MB/s (normal) and 2.2 MB/s (fast) per thread,
+demo, and by default the SHA-256 identity (about 20 % of the decode time
+at the normal level, 30 % at the fast level); a cache that verified the
+identity once can decode with `--trusted`, about 1.2 to 1.5 times faster.
+Compression runs at about 6 MB/s (normal) and 13 MB/s (fast) per thread,
 including a check that the output decodes to the input.
 
 ## Command line
