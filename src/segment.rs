@@ -646,7 +646,8 @@ pub fn decode(
         + 16 * cnt(PE_BITS)
         + 20 * cnt(SND_NUM)
         + 20 * cnt(TE_TYPE)
-        + 8 * cnt(STL_IDX);
+        + 8 * cnt(STL_IDX)
+        + 8 * (cnt(UC) / UC_MIN_SYMS);
     let mut scratch = recs_bytes as u64;
     for &(id, be, count, _) in &h.ents {
         scratch += if is_blob(id) && be == BE_ZSTD {
@@ -686,6 +687,7 @@ pub fn decode(
         cnt(SND_NUM),
         cnt(TE_TYPE),
         cnt(STL_IDX),
+        cnt(UC) / UC_MIN_SYMS,
     )?;
     let buf = Buf::new(dst);
     let run_g = |g: Group| -> Result<()> {
@@ -839,5 +841,68 @@ mod tests {
                 assert!(dst == src, "{level:?} {threads}");
             }
         }
+    }
+    /// usercmd hidden blocks (type 1): on and off the grid, other lengths,
+    /// two in one payload; streams UC and UC_A only where a segment has one.
+    #[test]
+    fn usercmd_round_trip() {
+        let mut src = demo();
+        let odd = [-0.0f32, f32::NAN, 180.0, -180.0, 1.2345, 359.99];
+        for i in 0..300u32 {
+            let mut p = Vec::new();
+            for j in 0..1 + (i % 37 == 0) as u32 {
+                let mut b = vec![((i + j) % 5) as u8, (i % 50 == 0) as u8, 13];
+                let yaw = ((i * 97) as u16 as i16 as f32) * (45.0 / 8192.0);
+                let pitch = if i % 11 == 0 {
+                    odd[(i as usize / 11) % odd.len()]
+                } else {
+                    -(i as f32) * (45.0 / 8192.0)
+                };
+                for a in [pitch, yaw, 0.0] {
+                    b.extend_from_slice(&a.to_le_bytes());
+                }
+                for m in [if i % 3 == 0 { 400i16 } else { 0 }, -508, 0] {
+                    b.extend_from_slice(&m.to_le_bytes());
+                }
+                b.extend_from_slice(&[(i % 4) as u8, (i % 90 == 0) as u8]);
+                p.extend_from_slice(&23u32.to_le_bytes());
+                p.extend_from_slice(&1u16.to_le_bytes());
+                p.extend_from_slice(&b);
+            }
+            if i % 50 == 7 {
+                p.extend_from_slice(&3u32.to_le_bytes());
+                p.extend_from_slice(&1u16.to_le_bytes());
+                p.extend_from_slice(&[1, 2, 3]);
+            }
+            src.push(if i % 3 == 0 { 13 } else { 0 });
+            src.push(3);
+            src.extend_from_slice(&0u32.to_le_bytes());
+            src.extend_from_slice(&(p.len() as u32).to_le_bytes());
+            src.extend_from_slice(&p);
+        }
+        src.extend(demo());
+        let levels: &[Level] = if cfg!(miri) {
+            &[Level::Normal]
+        } else {
+            &[Level::Normal, Level::Fast]
+        };
+        for &level in levels {
+            for threads in [1, 3] {
+                let (wk, _) = walk(&src, Proto::default(), true).unwrap();
+                let body = encode(&src, &wk, level, 0, 1, &mut Vec::new());
+                let h = parse_header(&body, src.len()).unwrap();
+                let uc = h.ents.iter().find(|e| e.0 == UC).unwrap().2;
+                assert!(uc >= (300 + 9) * UC_MIN_SYMS, "{uc}");
+                let mut dst = vec![0u8; src.len()];
+                decode(&body, &h, &mut dst, &[], threads, &Budget::unlimited()).unwrap();
+                assert!(dst == src, "{level:?} {threads}");
+            }
+        }
+        // without usercmd blocks neither stream is in the table
+        let plain = demo();
+        let (wk, _) = walk(&plain, Proto::default(), true).unwrap();
+        let body = encode(&plain, &wk, Level::Normal, 0, 1, &mut Vec::new());
+        let h = parse_header(&body, plain.len()).unwrap();
+        assert!(h.ents.iter().all(|e| e.0 != UC && e.0 != UC_A));
     }
 }

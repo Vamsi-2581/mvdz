@@ -355,7 +355,7 @@ fn hidden(c: &mut Ch, out: &mut Vec<u8>) {
         return;
     }
     for _ in 0..1 + c.below(4) {
-        let (ty, body): (u16, Vec<u8>) = match c.below(7) {
+        let (ty, body): (u16, Vec<u8>) = match c.below(8) {
             0 | 1 => {
                 let mut b = (c.below(4) as u16).to_le_bytes().to_vec();
                 let n = c.below(50);
@@ -368,6 +368,20 @@ fn hidden(c: &mut Ch, out: &mut Vec<u8>) {
             5 => {
                 let n = c.below(10);
                 (c.u16(), c.bytes(n))
+            }
+            7 => {
+                // a usercmd: angles mostly on the 360/65536 grid
+                let mut b = vec![c.below(8) as u8, c.below(2) as u8, 13];
+                for _ in 0..3 {
+                    let a = if c.below(8) == 0 {
+                        c.u32()
+                    } else {
+                        ((c.u16() as i16 as f32) * (45.0 / 8192.0)).to_bits()
+                    };
+                    b.extend_from_slice(&a.to_le_bytes());
+                }
+                b.extend(c.bytes(8));
+                (1, b)
             }
             _ => {
                 let n = c.below(10);

@@ -579,6 +579,7 @@ first). The demoinfo text is thus stored once per file.
 | 31 | te.misc | structural | temp-entity entity (2 bytes) or count (1 byte) |
 | 32 | pr.level | structural | svc_print level |
 | 33 | frags | structural | svc_updatefrags (3 bytes) |
+| 34 | uc | structural | usercmd blocks (§6.11): every field but the angles on the grid |
 | 48,49,50 | pi.ox, pi.oy, pi.oz | numeric | player origin, 16-bit coords |
 | 51,52,53 | pi.ap, pi.ay, pi.ar | numeric | player angles (16-bit) |
 | 54,55,56 | pe.ox, pe.oy, pe.oz | numeric | entity origin, 16-bit coords |
@@ -587,6 +588,7 @@ first). The demoinfo text is thus stored once per file.
 | 59 | stl.val | numeric | svc_updatestatlong value (32-bit) |
 | 60,61,62 | pi.fx, pi.fy, pi.fz | numeric | player origin, 32-bit float coords (bit patterns) |
 | 63,64,65 | pe.fx, pe.fy, pe.fz | numeric | entity origin, 32-bit float coords |
+| 66 | uc.a | numeric | usercmd angles on the 360/65536 grid (§7.6) |
 | 80 | raw | blob | escaped payload tails |
 | 81 | tail | blob | bytes after the last parsable frame |
 | 82 | set | blob | dem_set bodies (8 bytes each) |
@@ -599,8 +601,8 @@ first). The demoinfo text is thus stored once per file.
 | 79 | dinfo | (not stored) | the segment's demoinfo share (§5.3); never in the stream table |
 | 128+c | gen.c | blob | body of every other svc command c (incl. 11 serverdata) |
 
-Kinds (`streams.rs:is_lazy/is_num/is_blob`): structural = `id < 34`; numeric =
-`48 <= id < 66`; blob = `80 <= id <= 88` or `128 <= id < 384`.
+Kinds (`streams.rs:is_lazy/is_num/is_blob`): structural = `id < 35`; numeric =
+`48 <= id < 67`; blob = `80 <= id <= 88` or `128 <= id < 384`.
 
 * **Structural** streams are decoded one symbol at a time by the
   walker (§6), each symbol with a side context `ctx: u32` chosen by the
@@ -797,6 +799,8 @@ All zero/default unless noted, fresh per segment:
 | `prev_te` | u8 | 0 | segment |
 | `pe_prev_d` | u8 | 0 | reset to 0 at each packet-entities command |
 | `pl[256]` | {flags u16, frame u8, wf u8} | 0 | per player number |
+| `uc_prev[2]` | u8 | 0 | segment |
+| `uc[256]` | {drop, msec, grid, buttons, impulse u8, mv[3] u16} | 0 | per usercmd player number |
 | `ent[2048]` | {a[3] u8, ares[3] u8, frame u8, model u8, bits u8, last_pkt u32} | 0 | per entity |
 | `st[32][256]` | u8 | 0 | stat values per (target & 31, index) |
 | `pl_off[256][3]`, `ent_off[2048][3]` | u32 | NONE (0xFFFFFFFF) | offset of the last sent origin coord per axis |
@@ -814,12 +818,15 @@ Record lists (`walk.rs:Recs`), appended in walk order and consumed by §7:
 * `SndRec {off u32, refs[3] u32, kind u8, num u8}`
 * `TeRec {off u32, refs[3] u32, ty u8}`
 * `StlRec {off u32, key u16}`
+* `UcRec {off u32, num u8, grid u8}` (§6.11)
 
 The reference sizes these lists exactly from the stream table
 (`Recs::fixed`): pi ≤ count(pi.num), pe ≤ count(pe.bits), snd ≤
-count(snd.num), te ≤ count(te.type), stl ≤ count(stl.idx); pushing beyond
-capacity is an error. In a valid file these are always exact, so a port may
-use growable lists (but see §13).
+count(snd.num), te ≤ count(te.type), stl ≤ count(stl.idx), uc ≤
+floor(count(uc) / 12) (a usercmd block codes at least 12 uc symbols);
+pushing beyond capacity is an error. In a valid file these bounds always
+hold (all but the last exactly), so a port may use growable lists (but see
+§13).
 
 ### 6.4 Segment walk and frames (`Walker::run`, `Walker::frame`)
 
@@ -1136,6 +1143,8 @@ loop:
     ty = bn(HIDTYPE, 0, 2)
     if ty == 7 and bl == 8:
         for k in 0..4: bn(HIDDMG, k, 2)             // contexts k | (byte << 14)
+    elif ty == 1 and bl == 23:
+        usercmd()                                    // below
     elif ty == 3 and (flags & SF_DINFO):         // KTX demoinfo, from the share (§5.3)
         n = next 4 bytes of the share as u32le; error if missing or n != bl
         copy the next bl bytes of the share
@@ -1145,6 +1154,50 @@ loop:
 
 (The encoder emits tag 0 when fewer than 6 bytes remain or the block length
 is 0 or overruns the payload.)
+
+**usercmd blocks** (`Walker::ucmd`). mvdsv writes one hidden block of type
+1 per player input when usercmd recording is on (`sv_user.c`
+`SV_DebugClientCommand`), 23 bytes: player u8, dropnum u8, msec u8, pitch,
+yaw and roll as f32le, forward, side and up moves as i16le, buttons u8,
+impulse u8. Every hidden block of type 1 and length 23 is coded so, field
+by field into stream UC, whatever its bytes; its angles that sit on the 360/65536 grid are left to
+the numeric group of §7.6 (stream UC_A). The context's kind is in bits
+12-15:
+
+```
+usercmd():
+    p1, p2 = uc_prev
+    pl = b8(UC, min(p1, 31) | (min(p2, 31) << 5))     // kind 0
+    uc_prev = (pl, p1)
+    s = uc[pl]
+    s.drop = b8(UC, (1 << 12) | s.drop)
+    s.msec = b8(UC, (2 << 12) | s.msec)
+    grid = symbol(UC, (3 << 12) | s.grid)              // not written
+    if grid > 7: error
+    s.grid = grid
+    off = p
+    for a in 0..3:
+        if grid & (1 << a): reserve(4)                 // angle a, by §7.6
+        else: for k in 0..4: b8(UC, (4 << 12) | (a << 2) | k)
+    if grid != 0: push UcRec {off, num = pl, grid}
+    for m in 0..3:
+        lo = b8(UC, (5 << 12) | (m << 8) | (s.mv[m] & 0xff))
+        hi = b8(UC, (6 << 12) | (m << 8) | lo)
+        s.mv[m] = lo | (hi << 8)
+    s.buttons = b8(UC, (7 << 12) | s.buttons)
+    s.impulse = b8(UC, (8 << 12) | s.impulse)
+```
+
+`grid` bit `a` says that angle `a` is on the grid: there is an integer `s`
+in -32768..32767 with `f32(s × 45/8192)` bit for bit equal to the angle
+(`s × 45/8192` is exact in f32: `s × 45` has at most 21 bits and 8192 is a
+power of two). The client sends its angles as 16-bit values and the server
+stores exactly that value × 360/65536, so in practice every angle is on
+the grid; -0.0, NaN, +180.0 and anything else are not, and are kept as
+their four bytes. The encoder computes the bits as just described
+(`walk.rs:on_grid`). A type-1 block of any other length goes to `hid.misc`
+like every other block. A segment without usercmd blocks has neither
+stream in its table.
 
 ### 6.12 Context summary for structural streams
 
@@ -1181,6 +1234,7 @@ is 0 or overruns the payload.)
 | TE_MISC | `t | (k << 14)`; `t | 0x100` |
 | PR_LEVEL | 0 |
 | FRAGS | `k << 14` |
+| UC | `min(p1,31) | (min(p2,31) << 5)`; `(kind << 12) | x` for the other fields (§6.11) |
 
 Every context in this table fits in 16 bits, so the rans back end's
 `ctx & 0xFFFF` (§8.3) changes none of them; store and zstd ignore
@@ -1327,12 +1381,29 @@ else:
 
 (`ubits & 7` are the U_ORIGIN1..3 bits of the entity word.)
 
-### 7.6 Stat longs (59), sounds (57), temp entities (58)
+### 7.6 Stat longs (59), usercmd angles (66), sounds (57), temp entities (58)
 
 **stl.val (59)** (`numeric.rs:stl`): tables `last[8192] u32`, `lres[8192]
 i32`, zero. For each `StlRec r`: `k = r.key & 0x1fff`; `f = [r.key & 0xff,
 q(lres[k]), 0, 0, 0, 0]`; `v, r' = x32(r.off, last[k], f)`; `last[k] = v;
 lres[k] = r'`.
+
+**uc.a (66)** (`numeric.rs:uc`): `Track[256][3]`, zero. For each `UcRec
+r`, for `a` in 0..3 with `r.grid & (1 << a)` (other axes: skipped, their
+state untouched), `t = Track[r.num][a]`:
+
+```
+d    = (last - prev) as i16 as i32
+d2   = (prev - prev2) as i16 as i32
+pred = last + (d as u16)                                // mod 2^16
+f    = [q(res), q(d), q(d2), a, 0, 0]
+v    = pred + (r_dec as u16)                            // the grid value s, as u16
+write f32 bits of (v as i16) × 45/8192 as u32le at r.off + 4a
+res = (v - pred) as i16 as i32; prev2 = prev; prev = last; last = v
+```
+
+The encoder's residual is `(s - pred) as i16 as i32` for the grid value
+`s` of the angle (§6.11).
 
 **snd.o (57)** (`numeric.rs:snd`): for each `SndRec r`, for `i` in 0..3:
 `pred = (r.refs[i] == NONE) ? 0 : rd16(r.refs[i])` (the **decoded output**
@@ -1357,7 +1428,7 @@ for beams).
 
 * **Wave 1** (independent of each other; may run concurrently with the walk,
   following its record lists): player origins (48-50, 60-62), player angles
-  (51-53), entity origins (54-56, 63-65), stl.val (59).
+  (51-53), entity origins (54-56, 63-65), stl.val (59), uc.a (66).
 * **Wave 2** (after the walk and all of wave 1): snd.o (57) and te.o (58).
   They read, through `refs`, coordinates written by wave 1 (`pl_off` /
   `ent_off` point only at player/entity origin fields).
@@ -1376,6 +1447,7 @@ has no effect on the bits.
 | 57 snd.o | i \| kind<<2 | sound num | 0 | 0 | 0 | 0 |
 | 58 te.o | i \| sel<<2 (sel 0 point, 1 beam start, 2 beam end) | type | 0 | 0 | 0 | 0 |
 | 59 stl.val | stat index (key & 0xff) | q(lres) | 0 | 0 | 0 | 0 |
+| 66 uc.a | q(res) | q(d) | q(d2) | axis | 0 | 0 |
 | 60-62, 63-65 float | q(fres) | axis | 0 | 0 | 0 | 0 |
 
 ---
@@ -1607,6 +1679,7 @@ min(v, m)`:
 | 54-56 | `cl(f0,17) | (cl(f1,17) << 5) | ((f3 & 1) << 10)` |
 | 57, 58 | `f0 | (f1 << 4)` |
 | 59 | `f0 | (cl(f1,15) << 8)` |
+| 66 | `cl(f0,23) | (cl(f1,23) << 5) | (cl(f2,15) << 10) | (f3 << 14)` |
 | others (60-65) | `cl(f0,63) | (f1 << 6)` |
 
 Count rule: the stream is complete iff exactly `count` symbols were

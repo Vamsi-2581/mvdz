@@ -127,7 +127,9 @@ MB = 10^6 bytes of raw demo. The whole archive would take about 23.7 GB
 at the normal level and 28.6 GB at the fast level. Recent demos (2023-26)
 compress to about 0.18: current mvdsv records a snapshot every server
 frame (`sv_demofps 77`; about 62 a second in practice) where older demos
-mostly hold 20-27, at about the same compressed bytes per second of game. Every decode checks the CRC-32C of each segment and of the whole
+mostly hold 20-27, at about the same compressed bytes per second of game.
+Demos that record every player input (mvdsv's usercmd hidden blocks) are
+about twice as large raw and compress to about 0.10. Every decode checks the CRC-32C of each segment and of the whole
 demo, and by default the SHA-256 identity (about 20 % of the decode time
 at the normal level, 30 % at the fast level); a cache that verified the
 identity once can decode with `--trusted`, about 1.2 to 1.5 times faster.

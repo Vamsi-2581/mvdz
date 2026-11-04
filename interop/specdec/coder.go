@@ -106,8 +106,8 @@ type streamEntry struct {
 	body                     []byte
 }
 
-func isLazy(id uint64) bool { return id < 34 }
-func isNum(id uint64) bool  { return id >= 48 && id < 66 }
+func isLazy(id uint64) bool { return id < 35 }
+func isNum(id uint64) bool  { return id >= 48 && id < 67 }
 func isBlob(id uint64) bool { return (id >= 80 && id <= 88) || (id >= 128 && id < 384) }
 
 var _ = fmt.Sprintf

@@ -38,7 +38,13 @@ pub const TE_TYPE: usize = 30;
 pub const TE_MISC: usize = 31;
 pub const PR_LEVEL: usize = 32;
 pub const FRAGS: usize = 33;
-pub const N_LAZY: usize = 34;
+/// usercmd hidden blocks: every field but the angles on the grid
+pub const UC: usize = 34;
+/// The fewest UC symbols one usercmd block codes (its angles all on the
+/// grid): player, dropnum, msec, grid, three moves of two bytes, buttons,
+/// impulse. Bounds the usercmd record list (FORMAT.md §6.3).
+pub const UC_MIN_SYMS: usize = 12;
+pub const N_LAZY: usize = 35;
 
 // numeric streams
 pub const NUM_BASE: usize = 48;
@@ -50,7 +56,9 @@ pub const TE_O: usize = 58;
 pub const STL_VAL: usize = 59;
 pub const PI_F0: usize = 60;
 pub const PE_F0: usize = 63;
-pub const N_NUM_END: usize = 66;
+/// usercmd angles on the 360/65536 grid
+pub const UC_A: usize = 66;
+pub const N_NUM_END: usize = 67;
 
 // blob streams
 pub const RAW: usize = 80;
@@ -117,10 +125,11 @@ pub fn name(id: usize) -> String {
         "te.misc",
         "pr.level",
         "frags",
+        "uc",
     ];
     const NUM: [&str; N_NUM_END - NUM_BASE] = [
         "pi.ox", "pi.oy", "pi.oz", "pi.ap", "pi.ay", "pi.ar", "pe.ox", "pe.oy", "pe.oz", "snd.o",
-        "te.o", "stl.val", "pi.fx", "pi.fy", "pi.fz", "pe.fx", "pe.fy", "pe.fz",
+        "te.o", "stl.val", "pi.fx", "pi.fy", "pi.fz", "pe.fx", "pe.fy", "pe.fz", "uc.a",
     ];
     const BLOB: [&str; 9] = [
         "raw", "tail", "set", "text", "ping", "nails", "hid.misc", "snd.f", "te.f",

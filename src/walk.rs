@@ -94,6 +94,15 @@ pub struct TeRec {
     pub ty: u8,
 }
 
+/// A usercmd block with angles on the grid: `off` is the pitch's offset
+/// (yaw and roll follow), `grid` bit a set for each axis a on the grid.
+#[derive(Clone, Copy, Debug)]
+pub struct UcRec {
+    pub off: u32,
+    pub num: u8,
+    pub grid: u8,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct StlRec {
     pub off: u32,
@@ -247,6 +256,7 @@ pub struct Recs {
     pub snd: RecBuf<SndRec>,
     pub te: RecBuf<TeRec>,
     pub stl: RecBuf<StlRec>,
+    pub uc: RecBuf<UcRec>,
 }
 
 impl Recs {
@@ -258,6 +268,7 @@ impl Recs {
             snd: RecBuf::growable(n / 400),
             te: RecBuf::growable(n / 400),
             stl: RecBuf::growable(n / 2000),
+            uc: RecBuf::growable(0),
         }
     }
     /// Decode side: exact capacities from the stream table.
@@ -267,6 +278,7 @@ impl Recs {
         snd: usize,
         te: usize,
         stl: usize,
+        uc: usize,
     ) -> crate::error::Result<Recs> {
         Ok(Recs {
             pi: RecBuf::fixed(pi)?,
@@ -274,6 +286,7 @@ impl Recs {
             snd: RecBuf::fixed(snd)?,
             te: RecBuf::fixed(te)?,
             stl: RecBuf::fixed(stl)?,
+            uc: RecBuf::fixed(uc)?,
         })
     }
     pub fn finish(&self) {
@@ -282,6 +295,7 @@ impl Recs {
         self.snd.finish();
         self.te.finish();
         self.stl.finish();
+        self.uc.finish();
     }
 }
 
@@ -290,6 +304,17 @@ struct PlState {
     flags: u16,
     frame: u8,
     wf: u8,
+}
+
+/// The previous usercmd fields of one player (§6.11).
+#[derive(Clone, Copy, Default)]
+struct UcState {
+    drop: u8,
+    msec: u8,
+    grid: u8,
+    buttons: u8,
+    impulse: u8,
+    mv: [u16; 3],
 }
 
 #[derive(Clone, Copy, Default)]
@@ -335,6 +360,8 @@ pub struct Walker<'a, const ENC: bool, IO: SymIO> {
     /// KTX demoinfo blocks (hidden type 3) go to the DINFO pseudo-stream,
     /// the segment's share of the metadata's demoinfo store
     dinfo: bool,
+    uc_prev: [u8; 2],
+    ucs: Box<[UcState; 256]>,
     /// demo time at the end of the walk (ms)
     pub t_end: u32,
 }
@@ -383,6 +410,8 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
             prev_te: 0,
             pe_prev_d: 0,
             dinfo,
+            uc_prev: [0; 2],
+            ucs: Box::new([UcState::default(); 256]),
             t_end: 0,
         }
     }
@@ -1180,6 +1209,8 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
                 for k in 0..4 {
                     self.bn(HIDDMG, k, 2);
                 }
+            } else if ty == 1 && bl == 23 {
+                self.ucmd();
             } else if ty == 3 && self.dinfo {
                 // KTX demoinfo: kept once, in the metadata
                 if ENC {
@@ -1195,6 +1226,55 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
                 self.copy_blob(HIDMISC, bl as usize);
             }
         }
+    }
+
+    /// One usercmd block (mvdsv `SV_DebugClientCommand`): player, dropnum,
+    /// msec, pitch/yaw/roll as f32, forward/side/up as i16, buttons,
+    /// impulse. Angles on the 360/65536 grid are left to the numeric group
+    /// (`UcRec`); the rest goes to UC, context kind in bits 12-15.
+    fn ucmd(&mut self) {
+        let [p1, p2] = self.uc_prev;
+        let pl = self.b8(UC, (p1.min(31) as u32) | (p2.min(31) as u32) << 5);
+        self.uc_prev = [pl, p1];
+        let mut s = self.ucs[pl as usize];
+        s.drop = self.b8(UC, 1 << 12 | s.drop as u32);
+        s.msec = self.b8(UC, 2 << 12 | s.msec as u32);
+        // hidden() saw all 23 bytes inside the payload: the angles follow
+        let mut grid = 0u8;
+        if ENC {
+            for a in 0..3 {
+                if on_grid(le32(&self.src[self.p + 4 * a..])).is_some() {
+                    grid |= 1 << a;
+                }
+            }
+        }
+        grid = self.io.byte(UC, 3 << 12 | s.grid as u32, grid);
+        if grid > 7 {
+            self.err = true;
+            return;
+        }
+        s.grid = grid;
+        let off = self.p as u32;
+        for a in 0..3u32 {
+            if grid & (1 << a) != 0 {
+                self.reserve(4);
+            } else {
+                for k in 0..4 {
+                    self.b8(UC, 4 << 12 | a << 2 | k);
+                }
+            }
+        }
+        if grid != 0 && !self.recs.uc.push(UcRec { off, num: pl, grid }) {
+            self.err = true;
+        }
+        for m in 0..3 {
+            let lo = self.b8(UC, 5 << 12 | (m as u32) << 8 | (s.mv[m] & 0xff) as u32);
+            let hi = self.b8(UC, 6 << 12 | (m as u32) << 8 | lo as u32);
+            s.mv[m] = u16::from_le_bytes([lo, hi]);
+        }
+        s.buttons = self.b8(UC, 7 << 12 | s.buttons as u32);
+        s.impulse = self.b8(UC, 8 << 12 | s.impulse as u32);
+        self.ucs[pl as usize] = s;
     }
 }
 
@@ -1225,4 +1305,25 @@ fn cmd_class(c: u8) -> u8 {
 #[inline(always)]
 pub fn qb(v: u8) -> u8 {
     crate::numeric::q(v as i8 as i32)
+}
+
+/// The grid value of a usercmd angle: the s in -32768..=32767 whose
+/// f32(s * 45/8192) has exactly these bits (s * 45/8192 is exact in f32),
+/// or None (-0.0, NaN, +180 and anything else off the grid).
+#[inline]
+pub fn on_grid(bits: u32) -> Option<u16> {
+    // f * 8192 is exact and the division correctly rounded: an integer
+    // quotient comes out exactly
+    let x = f32::from_bits(bits) as f64 * 8192.0 / 45.0;
+    if x.fract() != 0.0 || !(-32768.0..=32767.0).contains(&x) {
+        return None;
+    }
+    let s = x as i32 as i16;
+    (grid_f32(s as u16) == bits).then_some(s as u16)
+}
+
+/// The f32 bits of grid value `s` (as i16): s * 45/8192, exact.
+#[inline]
+pub fn grid_f32(s: u16) -> u32 {
+    ((s as i16 as f32) * (45.0 / 8192.0)).to_bits()
 }

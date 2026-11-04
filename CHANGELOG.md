@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+* **usercmd blocks coded field by field** (format change: streams `uc`
+  and `uc.a`; FORMAT.md §6.11, §7.6). mvdsv can record every player
+  input as a hidden block (type 1, 23 bytes: `SV_DebugClientCommand`);
+  in demos that do, these blocks are about 60 %
+  of the raw demo, and rc.3 stored them as zstd. Their fields now go to
+  their own stream with the same player's previous value as context, and
+  the view angles, which are 16-bit values sent as floats, are coded as
+  residuals against a linear prediction. On four 4on4 demos that record
+  usercmds (36 MB raw each) the files shrink by 42 % at normal (6.25 to
+  3.61 MB, 0.100 of raw) and 34 % at fast (7.27 to 4.80 MB); normal
+  compression is about twice as fast, decoding about 25 % slower. A
+  type-1, 23-byte hidden block is now always coded so: an rc.3 file
+  holding one in `hid.misc` no longer decodes.
+
 ## 1.0.0-rc.3
 
 The normal level codes five structural contexts as the spec meant them

@@ -217,12 +217,14 @@ pub enum Group {
     /// all three entity axes in one pass
     PeAll,
     Stl,
+    /// usercmd angles on the grid
+    Uc,
     Snd,
     Te,
 }
 
 /// Wave 1, split per axis (for multi-threaded decoding).
-pub const WAVE1: [Group; 10] = [
+pub const WAVE1: [Group; 11] = [
     Group::PiA(1),
     Group::PiA(0),
     Group::PiO(0),
@@ -233,9 +235,16 @@ pub const WAVE1: [Group; 10] = [
     Group::PeO(2),
     Group::PiA(2),
     Group::Stl,
+    Group::Uc,
 ];
 /// Wave 1 for pipelined decoding next to the walker (one task per worker).
-pub const WAVE1_PIPE: [Group; 4] = [Group::PiAAll, Group::PiOAll, Group::PeAll, Group::Stl];
+pub const WAVE1_PIPE: [Group; 5] = [
+    Group::PiAAll,
+    Group::PiOAll,
+    Group::PeAll,
+    Group::Stl,
+    Group::Uc,
+];
 pub const WAVE2: [Group; 2] = [Group::Snd, Group::Te];
 
 impl Group {
@@ -255,6 +264,7 @@ impl Group {
             Group::PiOAll => &[PI_OX, PI_F0, PI_OX + 1, PI_F0 + 1, PI_OX + 2, PI_F0 + 2],
             Group::PiAAll => &[PI_AP, PI_AP + 1, PI_AP + 2],
             Group::Stl => &[STL_VAL],
+            Group::Uc => &[UC_A],
             Group::Snd => &[SND_O],
             Group::Te => &[TE_O],
         }
@@ -341,6 +351,7 @@ impl Group {
                 }
             }
             Group::Stl => stl::<ENC, IO>(recs, buf, io),
+            Group::Uc => uc::<ENC, IO>(recs, buf, io),
             Group::Snd => snd::<ENC, IO>(recs, buf, io),
             Group::Te => te::<ENC, IO>(recs, buf, io),
         }
@@ -534,6 +545,40 @@ fn stl<const ENC: bool, IO: NumIO>(recs: &Recs, buf: Buf, io: &mut IO) {
         let (v, d) = x32::<ENC, IO>(buf, r.off, last[k], io, 0, c);
         last[k] = v;
         lres[k] = d;
+    }
+}
+
+/// usercmd angles (FORMAT.md §7.6): per player and axis, the grid value
+/// against the linear prediction from that axis's last two grid values.
+fn uc<const ENC: bool, IO: NumIO>(recs: &Recs, buf: Buf, io: &mut IO) {
+    let mut st = vec![[Track::default(); 3]; 256];
+    for r in recs.uc.feed() {
+        let s = &mut st[r.num as usize];
+        for (a, t) in s.iter_mut().enumerate() {
+            if r.grid & (1 << a) == 0 {
+                continue;
+            }
+            let off = r.off + 4 * a as u32;
+            let d = t.last.wrapping_sub(t.prev) as i16 as i32;
+            let d2 = t.prev.wrapping_sub(t.prev2) as i16 as i32;
+            let pred = t.last.wrapping_add(d as u16);
+            let c = NCtx {
+                f: [q(t.res), q(d), q(d2), a as u8, 0, 0],
+            };
+            let v = if ENC {
+                let v = crate::walk::on_grid(buf.rd32(off)).expect("the walker saw it on the grid");
+                io.code(0, c, v.wrapping_sub(pred) as i16 as i32);
+                v
+            } else {
+                let v = pred.wrapping_add(io.code(0, c, 0) as u16);
+                buf.wr32(off, crate::walk::grid_f32(v));
+                v
+            };
+            t.res = v.wrapping_sub(pred) as i16 as i32;
+            t.prev2 = t.prev;
+            t.prev = t.last;
+            t.last = v;
+        }
     }
 }
 

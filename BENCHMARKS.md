@@ -111,6 +111,29 @@ smaller time step makes each one easier to predict. (The last three
 columns are of the normal level as measured for rc.2; rc.3 changes its
 size by 0.15 %.)
 
+**Demos with usercmd blocks.** mvdsv can record every player input as a
+hidden block (type 1, 23 bytes, `SV_DebugClientCommand`; about 77 a
+second per player). Such demos are rare in the archive so far and are not
+in the sample above. On four 4on4 demos that record them (schloss, e1m2,
+dm3, dm2 of 2026-10-02; 36.1 MB raw each, the blocks 60 % of it), the
+blocks are coded field by field (FORMAT.md §6.11):
+
+| | size per demo | / raw | / gzip |
+|---|---|---|---|
+| raw | 36.08 MB | 1 | 2.50 |
+| gzip (the hub's `.mvd.gz`) | 14.46 MB | 0.401 | 1 |
+| normal, rc.3 (blocks as zstd) | 6.25 MB | 0.173 | 0.433 |
+| normal | 3.61 MB | 0.100 | 0.250 |
+| fast, rc.3 | 7.27 MB | 0.202 | 0.503 |
+| fast | 4.80 MB | 0.133 | 0.332 |
+
+Library speed on these four, one thread (MB/s of raw demo, median of 3
+interleaved rounds, rc.3 release build against this version, both with
+mimalloc): normal compress 2.8 to 6.8, decode 42.6 to 32.4; fast compress
+15.1 to 15.5, decode 56.6 to 53.2. Normal compression gets faster because
+zstd 17 on the block bytes was its slow part; decoding gets slower because
+each block is now about 15 coded symbols.
+
 ## Speeds
 
 The release download (`mvdz-<version>-x86_64-unknown-linux-musl`, a

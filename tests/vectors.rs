@@ -442,6 +442,57 @@ fn hostile(v: &mut Vec<Vector>) {
         build(0, true, &st8, true),
         "META without tag 8 (timing)",
     );
+    // one usercmd block in a segment of stored streams built by hand
+    let mut one = Demo(Vec::new());
+    one.hidden(
+        0,
+        &[(1, &usercmd_block(0, 0, 13, [0.0; 3], [0; 3], [0, 0]))],
+    );
+    let one = one.0;
+    let oc = mvdz::encode::compress(&one, &c(Level::Normal, 0))
+        .unwrap()
+        .0;
+    let so = sections(&oc);
+    let io = so.iter().position(|s| s.0 == K_SEGMENT).unwrap();
+    let ucmd_seg = |last: (usize, &[u8])| {
+        let streams: [(usize, &[u8]); 7] = [
+            (mvdz::streams::TIME, &[0]),
+            (mvdz::streams::TYPE, &[3]),
+            (mvdz::streams::MASK, &[0; 4]),
+            (mvdz::streams::HIDTAG, &[1, 2]),
+            (mvdz::streams::HIDLEN, &[23, 0, 0, 0]),
+            (mvdz::streams::HIDTYPE, &[1, 0]),
+            last,
+        ];
+        let mut body = Vec::new();
+        for x in [0, 0, 0, 0, 0, 0, 0, streams.len() as u64] {
+            put_uv(&mut body, x);
+        }
+        for (id, b) in &streams {
+            for x in [*id as u64, 0, b.len() as u64, b.len() as u64] {
+                put_uv(&mut body, x);
+            }
+        }
+        for (_, b) in &streams {
+            body.extend_from_slice(b);
+        }
+        let mut b = seg_hdr_bytes(0, one.len() as u64, 0, mvdz::util::crc32(&one), C_TRANSFORM);
+        b.extend_from_slice(&body);
+        let mut so = so.clone();
+        so[io] = (K_SEGMENT, b);
+        build(0, true, &so, true)
+    };
+    add(
+        "ucmd-grid",
+        ucmd_seg((mvdz::streams::UC, &[0, 0, 13, 9])),
+        "a usercmd block whose grid flags symbol is 9 (stored streams)",
+    );
+    let misc = usercmd_block(0, 0, 13, [0.0; 3], [0; 3], [0, 0]);
+    add(
+        "ucmd-misc",
+        ucmd_seg((mvdz::streams::HIDMISC, &misc)),
+        "a usercmd block (type 1, 23 bytes) stored in hid.misc, no uc stream",
+    );
 }
 
 /// The raw fields of a META.
@@ -714,6 +765,31 @@ fn all_vectors() -> Option<Vec<Vector>> {
         sc,
         &su,
         "synthetic demo with a 0x000B start timestamp in the 8-byte u64le form (META tag 11 = 1778675998090)",
+    );
+    let uc = usercmd_demo();
+    add(
+        "usercmd.normal.mvdz",
+        one(&uc, c(Level::Normal, 0)),
+        &uc,
+        "synthetic demo with usercmd hidden blocks (4 players, angles on and off the grid, other type-1 lengths)",
+    );
+    add(
+        "usercmd.fast.mvdz",
+        one(&uc, c(Level::Fast, 0)),
+        &uc,
+        "the same, --fast",
+    );
+    add(
+        "usercmd.normal.seg8k.mvdz",
+        one(&uc, c(Level::Normal, 8192)),
+        &uc,
+        "the same, -s 8K",
+    );
+    add(
+        "usercmd.normal.streamed.mvdz",
+        st(&uc, c(Level::Normal, 8192)),
+        &uc,
+        "the same, Writer, segment 8K",
     );
     hostile(&mut v);
     Some(v)
