@@ -20,7 +20,6 @@ use crate::error::{Error, Result};
 use crate::numeric::NCtx;
 use crate::streams::*;
 use crate::util::{Rd, put_uv};
-use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 pub const SCALE: u32 = 12;
@@ -160,30 +159,61 @@ fn cross_bits(c: &[u32], p: &[u32]) -> f64 {
 struct Model {
     alpha: usize,
     steps: u32,
-    ctx_of: HashMap<u32, usize>,
+    /// Own contexts, ascending: `own[i]` codes with `tables[i + 1]`.
+    own: Vec<u32>,
+    map: Vec<u32>,
     tables: Vec<Table>,
 }
 
 pub static TABLE_BITS_PER_SYM: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(5);
 const TABLE_BITS_BASE: f64 = 16.0;
 
-fn build_model(syms: &[(u32, u16)], alpha: usize, steps: u32) -> Model {
+/// Counts and table selection do not depend on the quantisation: computed
+/// once for both candidates of `best_pack`.
+struct Counts {
+    alpha: usize,
+    own: Vec<u32>,
+    own_counts: Vec<u32>,
+    rest: Vec<u32>,
+}
+
+fn count_and_select(syms: &[(u32, u16)], alpha: usize) -> Counts {
     let per_sym = TABLE_BITS_PER_SYM.load(std::sync::atomic::Ordering::Relaxed) as f64;
-    let mut counts: HashMap<u32, Vec<u32>> = HashMap::new();
+    let maxc = syms.iter().map(|&(c, _)| c).max().unwrap_or(0) as usize;
+    // row_of, is_own and the model's map are dense arrays sized by the
+    // largest context; contexts are 16-bit by spec (§6.12).
+    assert!(maxc <= 0xffff, "context {maxc:#x} over 16 bits");
+    let mut row_of = vec![u32::MAX; maxc + 1];
+    let mut rows: Vec<u32> = Vec::new();
+    let mut keys: Vec<u32> = Vec::new();
     let mut global = vec![0u32; alpha];
     for &(c, s) in syms {
-        counts.entry(c).or_insert_with(|| vec![0; alpha])[s as usize] += 1;
+        let r = row_of[c as usize];
+        let r = if r == u32::MAX {
+            let r = keys.len() as u32;
+            row_of[c as usize] = r;
+            keys.push(c);
+            rows.resize(rows.len() + alpha, 0);
+            r
+        } else {
+            r
+        };
+        rows[r as usize * alpha + s as usize] += 1;
         global[s as usize] += 1;
     }
-    let mut keys: Vec<u32> = counts.keys().copied().collect();
-    keys.sort_by_key(|&k| (std::cmp::Reverse(counts[&k].iter().sum::<u32>()), k));
+    let row = |k: u32| &rows[row_of[k as usize] as usize * alpha..][..alpha];
+    // selection order is part of the output: most frequent context first
+    let totals: Vec<u32> = keys.iter().map(|&k| row(k).iter().sum()).collect();
+    let mut order: Vec<usize> = (0..keys.len()).collect();
+    order.sort_by_key(|&i| (std::cmp::Reverse(totals[i]), keys[i]));
+    let keys: Vec<u32> = order.iter().map(|&i| keys[i]).collect();
     let mut own: Vec<u32> = Vec::new();
     let mut fb = global.clone();
     for pass in 0..2 {
         own.clear();
         let mut rest = vec![0u32; alpha];
         for &k in &keys {
-            let c = &counts[&k];
+            let c = row(k);
             let present = c.iter().filter(|&&x| x > 0).count() as f64;
             let own_cost = entropy_bits(c) + TABLE_BITS_BASE + per_sym * present;
             if own_cost < cross_bits(c, &fb) {
@@ -201,32 +231,55 @@ fn build_model(syms: &[(u32, u16)], alpha: usize, steps: u32) -> Model {
             fb = rest;
         }
     }
-    let own_set: std::collections::HashSet<u32> = own.iter().copied().collect();
+    own.sort();
+    let mut is_own = vec![false; maxc + 1];
+    for &k in &own {
+        is_own[k as usize] = true;
+    }
     let mut rest = vec![0u32; alpha];
     for &k in &keys {
-        if !own_set.contains(&k) {
+        if !is_own[k as usize] {
+            let c = row(k);
             for i in 0..alpha {
-                rest[i] += counts[&k][i];
+                rest[i] += c[i];
             }
         }
     }
-    own.sort();
+    let mut own_counts = Vec::with_capacity(own.len() * alpha);
+    for &k in &own {
+        own_counts.extend_from_slice(row(k));
+    }
+    Counts {
+        alpha,
+        own,
+        own_counts,
+        rest,
+    }
+}
+
+fn build_model(c: &Counts, steps: u32) -> Model {
+    let alpha = c.alpha;
     let mut tables = vec![Table::from_q(
-        rest.iter().map(|&c| qlog(c, steps)).collect(),
+        c.rest.iter().map(|&n| qlog(n, steps)).collect(),
         steps,
     )];
-    let mut ctx_of = HashMap::new();
-    for (i, &k) in own.iter().enumerate() {
+    let maxk = c.own.last().map_or(0, |&k| k as usize + 1);
+    let mut map = vec![0u32; maxk];
+    for (i, &k) in c.own.iter().enumerate() {
         tables.push(Table::from_q(
-            counts[&k].iter().map(|&c| qlog(c, steps)).collect(),
+            c.own_counts[i * alpha..(i + 1) * alpha]
+                .iter()
+                .map(|&n| qlog(n, steps))
+                .collect(),
             steps,
         ));
-        ctx_of.insert(k, i + 1);
+        map[k as usize] = (i + 1) as u32;
     }
     Model {
         alpha,
         steps,
-        ctx_of,
+        own: c.own.clone(),
+        map,
         tables,
     }
 }
@@ -264,13 +317,11 @@ fn write_model(m: &Model) -> (Vec<u8>, u64) {
     im.put(&mut e, NQC + 2, (m.tables.len() - 1) as u32);
     let fb = m.tables[0].q.clone();
     write_table(&mut e, &mut im, &fb, None);
-    let mut own: Vec<(u32, usize)> = m.ctx_of.iter().map(|(&k, &v)| (k, v)).collect();
-    own.sort();
     let mut prevk = 0u32;
-    for (i, (k, ti)) in own.into_iter().enumerate() {
+    for (i, &k) in m.own.iter().enumerate() {
         im.put(&mut e, NQC + 3, if i == 0 { k } else { k - prevk });
         prevk = k;
-        write_table(&mut e, &mut im, &m.tables[ti].q, Some(&fb));
+        write_table(&mut e, &mut im, &m.tables[i + 1].q, Some(&fb));
     }
     let n = e.decisions;
     (e.finish(), n)
@@ -637,7 +688,7 @@ impl<'a> RDec<'a> {
 fn rans_encode(model: &Model, syms: &[(u32, u16)]) -> Vec<u8> {
     let tix: Vec<usize> = syms
         .iter()
-        .map(|(c, _)| model.ctx_of.get(c).copied().unwrap_or(0))
+        .map(|&(c, _)| model.map.get(c as usize).copied().unwrap_or(0) as usize)
         .collect();
     let mut coded = 0usize;
     let mut state_of = vec![0u8; syms.len()];
@@ -720,8 +771,9 @@ fn unpack<'a>(
 /// neither model is allowed (the caller then uses another back end).
 fn best(syms: &[(u32, u16)], alpha: usize, extra: &[u8]) -> Option<(Model, Vec<u8>)> {
     let mut best: Option<(Model, Vec<u8>)> = None;
+    let counts = count_and_select(syms, alpha);
     for steps in [2u32, 4] {
-        let m = build_model(syms, alpha, steps);
+        let m = build_model(&counts, steps);
         if let Some(p) = pack(&m, syms, extra) {
             if best.as_ref().is_none_or(|b| p.len() < b.1.len()) {
                 best = Some((m, p));

@@ -20,6 +20,14 @@ run to run and are given as the median over rounds, with [min-max]:
 * each run starts only when the machine is idle (under 20 % of the 4 cores
   busy over 5 s; the background services alone use 10-13 %).
 
+The tables were measured on rc.3. The normal level's compression speeds
+were measured again after its encoder got faster (Unreleased in
+CHANGELOG.md; output byte-identical), on the same machine with the same
+build configurations and method, 7 rounds; the other figures stand (in
+the same runs, the release build before that change and the one after
+decode, and compress at the fast level, within 4 % of each other at 1t
+and 4t and 10 % in batch, the noisiest column).
+
 The speeds quoted by the README are those of the **release downloads**
 (Builds, below).
 
@@ -152,7 +160,10 @@ interleaved rounds, rc.3 release build against this version, both with
 mimalloc): normal compress 2.8 to 6.8, decode 42.6 to 32.4; fast compress
 15.1 to 15.5, decode 56.6 to 53.2. Normal compression gets faster because
 zstd 17 on the block bytes was its slow part; decoding gets slower because
-each block is now about 15 coded symbols.
+each block is now about 15 coded symbols. With the faster normal-level
+encoder (Unreleased in CHANGELOG.md) normal compression on these four is
+9.3 [9.1-9.9] MB/s (3 rounds, measured later; the same runs gave normal
+decode 33.3, fast compress 14.6 and fast decode 57.5).
 
 ## Speeds
 
@@ -167,7 +178,7 @@ each.
 
 | level | compress 1t | compress 4t | compress batch | decode 1t | decode 4t | decode batch |
 |---|---|---|---|---|---|---|
-| normal | 5.8 [5.3-6.0] | 10.8 [10.2-10.9] | 17.2 [15.4-18.2] | 26.8 [25.5-27.5] | 33.5 [29.8-35.8] | 71 [63-83] |
+| normal | 8.1 [7.6-8.4] | 11.7 [11.0-12.2] | 22.2 [21.1-23.8] | 26.8 [25.5-27.5] | 33.5 [29.8-35.8] | 71 [63-83] |
 | fast | 12.8 [11.1-13.3] | 17.8 [16.8-18.5] | 39.2 [28.8-40.6] | 44.2 [39.6-45.3] | 47.8 [44.9-51.7] | 110 [96-121] |
 
 **Command line**, `mvdz decompress`, one process per file, the decoded
@@ -196,8 +207,8 @@ target-cpu=native"` is set. Speeds on set8 (library, or CLI as marked):
 
 | measure | musl | musl -v3 | **release** (musl, mimalloc) | **release -v3** | glibc (`cargo build`) | glibc, native |
 |---|---|---|---|---|---|---|
-| compress, normal, 1t | 4.5 | 4.7 | 5.8 | 6.0 | 6.1 | 6.1 |
-| compress, normal, batch | 11.7 | 12.8 | 17.2 | 17.6 | 18.0 | 18.8 |
+| compress, normal, 1t | 6.0 | 6.5 | 8.1 | 8.4 | 8.4 | 8.1 |
+| compress, normal, batch | 15.4 | 16.0 | 22.2 | 23.6 | 24.7 | 24.4 |
 | decode, normal, 1t | 22.9 | 25.5 | 26.8 | 31.8 | 27.2 | 30.6 |
 | decode, normal, 4t | 23.7 | 25.5 | 33.5 | 39.4 | 38.0 | 40.3 |
 | decode, normal, batch | 56 | 64 | 71 | 82 | 84 | 87 |
@@ -211,7 +222,8 @@ target-cpu=native"` is set. Speeds on set8 (library, or CLI as marked):
 | CLI decode, normal | 18.1 | 20.8 | 23.1 | 25.5 | 23.3 | 23.7 |
 | CLI decode, fast | 33.8 | 34.9 | 35.0 | 40.7 | 36.7 | 36.6 |
 
-(Medians of 5 rounds; the ranges, about ±5-10 %, are in the raw results.)
+(Medians of 5 rounds, the normal level's compression of 7; the ranges,
+about ±5-10 %, are in the raw results.)
 
 * mimalloc brings the musl build within about 5 % of glibc at one thread
   at the normal level, and restores multi-threaded decoding (4 threads:

@@ -138,7 +138,7 @@ about twice as large raw and compress to about 0.10. Every decode checks the CRC
 demo, and by default the SHA-256 identity (about 20 % of the decode time
 at the normal level, 30 % at the fast level); a cache that verified the
 identity once can decode with `--trusted`, about 1.2 to 1.5 times faster.
-Compression runs at about 6 MB/s (normal) and 13 MB/s (fast) per thread,
+Compression runs at about 8 MB/s (normal) and 13 MB/s (fast) per thread,
 including a check that the output decodes to the input.
 
 ## Command line
@@ -322,7 +322,7 @@ sticky, buffers are freed with `mvdz_free` (but the static strings of
 `mvdz_version` and `mvdz_strerror` never are), and callbacks must return
 normally (no `longjmp`) and must not call back into their own handle.
 `mvdz_writer_write` codes each segment on the calling thread when it
-fills, about 0.25 s per MiB at the normal level (0.08 s at the fast
+fills, about 0.15 s per MiB at the normal level (0.08 s at the fast
 level): a server should feed the
 writer from a recording thread, not from its frame loop.
 Attachments are listed in the JSON of `mvdz_info_json`, read with
