@@ -360,11 +360,6 @@ pub struct Walker<'a, const ENC: bool, IO: SymIO> {
     /// KTX demoinfo blocks (hidden type 3) go to the DINFO pseudo-stream,
     /// the segment's share of the metadata's demoinfo store
     dinfo: bool,
-    /// usercmd blocks (hidden type 1, 23 bytes) are coded field by field
-    /// (segment flag SF_UCMD; always on when encoding)
-    ucmd: bool,
-    /// usercmd blocks coded so (the encoder sets SF_UCMD if any)
-    pub uc_n: usize,
     uc_prev: [u8; 2],
     ucs: Box<[UcState; 256]>,
     /// demo time at the end of the walk (ms)
@@ -383,7 +378,6 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
         io: IO,
         proto: Proto,
         dinfo: bool,
-        ucmd: bool,
     ) -> Self {
         Walker {
             src,
@@ -416,8 +410,6 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
             prev_te: 0,
             pe_prev_d: 0,
             dinfo,
-            ucmd,
-            uc_n: 0,
             uc_prev: [0; 2],
             ucs: Box::new([UcState::default(); 256]),
             t_end: 0,
@@ -1217,7 +1209,7 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
                 for k in 0..4 {
                     self.bn(HIDDMG, k, 2);
                 }
-            } else if ty == 1 && bl == 23 && self.ucmd {
+            } else if ty == 1 && bl == 23 {
                 self.ucmd();
             } else if ty == 3 && self.dinfo {
                 // KTX demoinfo: kept once, in the metadata
@@ -1244,12 +1236,12 @@ impl<'a, const ENC: bool, IO: SymIO> Walker<'a, ENC, IO> {
         let [p1, p2] = self.uc_prev;
         let pl = self.b8(UC, (p1.min(31) as u32) | (p2.min(31) as u32) << 5);
         self.uc_prev = [pl, p1];
-        self.uc_n += 1;
         let mut s = self.ucs[pl as usize];
         s.drop = self.b8(UC, 1 << 12 | s.drop as u32);
         s.msec = self.b8(UC, 2 << 12 | s.msec as u32);
+        // hidden() saw all 23 bytes inside the payload: the angles follow
         let mut grid = 0u8;
-        if ENC && self.src.len() - self.p >= 12 {
+        if ENC {
             for a in 0..3 {
                 if on_grid(le32(&self.src[self.p + 4 * a..])).is_some() {
                     grid |= 1 << a;

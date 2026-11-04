@@ -116,7 +116,7 @@ hidden block (type 1, 23 bytes, `SV_DebugClientCommand`; about 77 a
 second per player). Such demos are rare in the archive so far and are not
 in the sample above. On four 4on4 demos that record them (schloss, e1m2,
 dm3, dm2 of 2026-10-02; 36.1 MB raw each, the blocks 60 % of it), the
-blocks are coded field by field (FORMAT.md §6.11, flag `SF_UCMD`):
+blocks are coded field by field (FORMAT.md §6.11):
 
 | | size per demo | / raw | / gzip |
 |---|---|---|---|

@@ -49,5 +49,5 @@ hostile-zstd-legacy.mvdz	error: corrupt: zstd data	-	META as a legacy (v0.7) zst
 hostile-zstd-window.mvdz	error: corrupt: zstd data	-	a zstd segment whose frame declares a 2^40-byte window
 hostile-share-empty.mvdz	error: corrupt: demoinfo share	-	a segment flagged as sharing demoinfo with an empty share
 hostile-meta-no-timing.mvdz	error: corrupt: metadata identity	-	META without tag 8 (timing)
-hostile-ucmd-flag-clear.mvdz	error: corrupt: structure	-	a segment with usercmd blocks coded field by field, flag SF_UCMD cleared
 hostile-ucmd-grid.mvdz	error: corrupt: structure	-	a usercmd block whose grid flags symbol is 9 (stored streams)
+hostile-ucmd-misc.mvdz	error: corrupt: structure	-	a usercmd block (type 1, 23 bytes) stored in hid.misc, no uc stream

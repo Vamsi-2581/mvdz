@@ -38,8 +38,12 @@ pub const TE_TYPE: usize = 30;
 pub const TE_MISC: usize = 31;
 pub const PR_LEVEL: usize = 32;
 pub const FRAGS: usize = 33;
-/// usercmd hidden blocks (segment flag SF_UCMD): every field but the angles
+/// usercmd hidden blocks: every field but the angles on the grid
 pub const UC: usize = 34;
+/// The fewest UC symbols one usercmd block codes (its angles all on the
+/// grid): player, dropnum, msec, grid, three moves of two bytes, buttons,
+/// impulse. Bounds the usercmd record list (FORMAT.md §6.3).
+pub const UC_MIN_SYMS: usize = 12;
 pub const N_LAZY: usize = 35;
 
 // numeric streams
@@ -52,7 +56,7 @@ pub const TE_O: usize = 58;
 pub const STL_VAL: usize = 59;
 pub const PI_F0: usize = 60;
 pub const PE_F0: usize = 63;
-/// usercmd angles on the 360/65536 grid (segment flag SF_UCMD)
+/// usercmd angles on the 360/65536 grid
 pub const UC_A: usize = 66;
 pub const N_NUM_END: usize = 67;
 

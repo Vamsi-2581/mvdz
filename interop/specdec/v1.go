@@ -296,7 +296,7 @@ func decodeV1(file []byte) (out []byte, err error) {
 				fl := x.uv()
 				s.dOff, s.dLen = x.uv(), x.uv()
 				s.share = fl&1 != 0
-				if fl&^5 != 0 || (!s.share && (s.dOff != 0 || s.dLen != 0)) || (s.share && s.dLen == 0) {
+				if fl&^1 != 0 || (!s.share && (s.dOff != 0 || s.dLen != 0)) || (s.share && s.dLen == 0) {
 					fail("segment flags/share")
 				}
 			case 1, 2:
@@ -529,7 +529,7 @@ func decodeV1Segment(body []byte, dst []byte, share []byte) {
 	fte, fte2, mvd1 := r.uv(), r.uv(), r.uv()
 	tail := r.uv()
 	n := r.uv()
-	if flags&^5 != 0 || (flags&1 == 0 && (dOff != 0 || dLen != 0)) || fte > 0xFFFFFFFF || fte2 > 0xFFFFFFFF || mvd1 > 0xFFFFFFFF {
+	if flags&^1 != 0 || (flags&1 == 0 && (dOff != 0 || dLen != 0)) || fte > 0xFFFFFFFF || fte2 > 0xFFFFFFFF || mvd1 > 0xFFFFFFFF {
 		fail("segment header")
 	}
 	if tail > uint64(len(dst)) || n > 384 {
@@ -609,7 +609,6 @@ func decodeV1Segment(body []byte, dst []byte, share []byte) {
 		w.share = true
 		w.dinfo = &rd{b: share}
 	}
-	w.ucmd = flags&4 != 0
 	w.run(int(tail))
 	if w.dinfo != nil && w.dinfo.left() != 0 {
 		fail("share not consumed")

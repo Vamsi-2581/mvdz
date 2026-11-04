@@ -442,21 +442,7 @@ fn hostile(v: &mut Vec<Vector>) {
         build(0, true, &st8, true),
         "META without tag 8 (timing)",
     );
-    // usercmd blocks coded field by field, the segment's SF_UCMD cleared:
-    // the walk sends them to hid.misc, which is absent
-    let uc = usercmd_demo();
-    let ucc = mvdz::compress(&uc, &c(Level::Normal, 0)).unwrap();
-    let mut su = sections(&ucc);
-    let iu = su.iter().position(|s| s.0 == K_SEGMENT).unwrap();
-    let hu = parse_seg_hdr(&su[iu].1).unwrap();
-    assert_eq!(su[iu].1[hu.body_off], mvdz::segment::SF_UCMD as u8);
-    su[iu].1[hu.body_off] = 0;
-    add(
-        "ucmd-flag-clear",
-        build(0, true, &su, true),
-        "a segment with usercmd blocks coded field by field, flag SF_UCMD cleared",
-    );
-    // one usercmd whose grid symbol is 9 (stored streams)
+    // one usercmd block in a segment of stored streams built by hand
     let mut one = Demo(Vec::new());
     one.hidden(
         0,
@@ -466,45 +452,46 @@ fn hostile(v: &mut Vec<Vector>) {
     let oc = mvdz::encode::compress(&one, &c(Level::Normal, 0))
         .unwrap()
         .0;
-    let mut so = sections(&oc);
+    let so = sections(&oc);
     let io = so.iter().position(|s| s.0 == K_SEGMENT).unwrap();
-    let streams: [(usize, &[u8]); 7] = [
-        (mvdz::streams::TIME, &[0]),
-        (mvdz::streams::TYPE, &[3]),
-        (mvdz::streams::MASK, &[0; 4]),
-        (mvdz::streams::HIDTAG, &[1, 2]),
-        (mvdz::streams::HIDLEN, &[23, 0, 0, 0]),
-        (mvdz::streams::HIDTYPE, &[1, 0]),
-        (mvdz::streams::UC, &[0, 0, 13, 9]),
-    ];
-    let mut body = Vec::new();
-    for x in [
-        mvdz::segment::SF_UCMD,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        streams.len() as u64,
-    ] {
-        put_uv(&mut body, x);
-    }
-    for (id, b) in &streams {
-        for x in [*id as u64, 0, b.len() as u64, b.len() as u64] {
+    let ucmd_seg = |last: (usize, &[u8])| {
+        let streams: [(usize, &[u8]); 7] = [
+            (mvdz::streams::TIME, &[0]),
+            (mvdz::streams::TYPE, &[3]),
+            (mvdz::streams::MASK, &[0; 4]),
+            (mvdz::streams::HIDTAG, &[1, 2]),
+            (mvdz::streams::HIDLEN, &[23, 0, 0, 0]),
+            (mvdz::streams::HIDTYPE, &[1, 0]),
+            last,
+        ];
+        let mut body = Vec::new();
+        for x in [0, 0, 0, 0, 0, 0, 0, streams.len() as u64] {
             put_uv(&mut body, x);
         }
-    }
-    for (_, b) in &streams {
-        body.extend_from_slice(b);
-    }
-    let mut b = seg_hdr_bytes(0, one.len() as u64, 0, mvdz::util::crc32(&one), C_TRANSFORM);
-    b.extend_from_slice(&body);
-    so[io] = (K_SEGMENT, b);
+        for (id, b) in &streams {
+            for x in [*id as u64, 0, b.len() as u64, b.len() as u64] {
+                put_uv(&mut body, x);
+            }
+        }
+        for (_, b) in &streams {
+            body.extend_from_slice(b);
+        }
+        let mut b = seg_hdr_bytes(0, one.len() as u64, 0, mvdz::util::crc32(&one), C_TRANSFORM);
+        b.extend_from_slice(&body);
+        let mut so = so.clone();
+        so[io] = (K_SEGMENT, b);
+        build(0, true, &so, true)
+    };
     add(
         "ucmd-grid",
-        build(0, true, &so, true),
+        ucmd_seg((mvdz::streams::UC, &[0, 0, 13, 9])),
         "a usercmd block whose grid flags symbol is 9 (stored streams)",
+    );
+    let misc = usercmd_block(0, 0, 13, [0.0; 3], [0; 3], [0, 0]);
+    add(
+        "ucmd-misc",
+        ucmd_seg((mvdz::streams::HIDMISC, &misc)),
+        "a usercmd block (type 1, 23 bytes) stored in hid.misc, no uc stream",
     );
 }
 

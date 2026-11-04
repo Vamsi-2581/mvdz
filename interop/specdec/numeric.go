@@ -214,7 +214,7 @@ func stlAll(out []byte, recs []StlRec, val valFn) {
 	}
 }
 
-// FORMAT.md §7.x: usercmd angles, s * 45/8192 as f32 (exact)
+// FORMAT.md §7.6: usercmd angles, s * 45/8192 as f32 (exact)
 func ucAll(out []byte, recs []UcRec, val valFn) {
 	var tr [256][3]Track
 	for _, r := range recs {

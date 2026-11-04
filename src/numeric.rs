@@ -548,7 +548,7 @@ fn stl<const ENC: bool, IO: NumIO>(recs: &Recs, buf: Buf, io: &mut IO) {
     }
 }
 
-/// usercmd angles (FORMAT.md §7.x): per player and axis, the grid value
+/// usercmd angles (FORMAT.md §7.6): per player and axis, the grid value
 /// against the linear prediction from that axis's last two grid values.
 fn uc<const ENC: bool, IO: NumIO>(recs: &Recs, buf: Buf, io: &mut IO) {
     let mut st = vec![[Track::default(); 3]; 256];
@@ -566,7 +566,7 @@ fn uc<const ENC: bool, IO: NumIO>(recs: &Recs, buf: Buf, io: &mut IO) {
                 f: [q(t.res), q(d), q(d2), a as u8, 0, 0],
             };
             let v = if ENC {
-                let v = crate::walk::on_grid(buf.rd32(off)).unwrap_or(0);
+                let v = crate::walk::on_grid(buf.rd32(off)).expect("the walker saw it on the grid");
                 io.code(0, c, v.wrapping_sub(pred) as i16 as i32);
                 v
             } else {

@@ -509,9 +509,8 @@ stream bodies, concatenated in table order (body k is len_k bytes)
 ```
 
 * `flags`: bit 0 (`SF_DINFO`) = KTX demoinfo blocks come from the
-  metadata's store (§5.3); bit 2 (`SF_UCMD`) = usercmd hidden blocks are
-  coded field by field (§6.11). Other bits: error ("segment flags"; they
-  would change the decoding). With bit 0 clear, `dinfo_off` and `dinfo_len` must
+  metadata's store (§5.3). Other bits: error ("segment flags"; they would
+  change the decoding). With bit 0 clear, `dinfo_off` and `dinfo_len` must
   be 0; with bit 0 set, `dinfo_len` must be at least 1 (a flagged segment
   carries at least one block). These rules on the first three fields are
   structural (§9 rule 6): every reader applies them when it meets the
@@ -800,7 +799,7 @@ All zero/default unless noted, fresh per segment:
 | `prev_te` | u8 | 0 | segment |
 | `pe_prev_d` | u8 | 0 | reset to 0 at each packet-entities command |
 | `pl[256]` | {flags u16, frame u8, wf u8} | 0 | per player number |
-| `uc_prev[2]` | u8 | 0 | the last two usercmd player numbers (§6.11) |
+| `uc_prev[2]` | u8 | 0 | segment |
 | `uc[256]` | {drop, msec, grid, buttons, impulse u8, mv[3] u16} | 0 | per usercmd player number |
 | `ent[2048]` | {a[3] u8, ares[3] u8, frame u8, model u8, bits u8, last_pkt u32} | 0 | per entity |
 | `st[32][256]` | u8 | 0 | stat values per (target & 31, index) |
@@ -825,8 +824,9 @@ The reference sizes these lists exactly from the stream table
 (`Recs::fixed`): pi ≤ count(pi.num), pe ≤ count(pe.bits), snd ≤
 count(snd.num), te ≤ count(te.type), stl ≤ count(stl.idx), uc ≤
 floor(count(uc) / 12) (a usercmd block codes at least 12 uc symbols);
-pushing beyond capacity is an error. In a valid file these are always exact, so a port may
-use growable lists (but see §13).
+pushing beyond capacity is an error. In a valid file these bounds always
+hold (all but the last exactly), so a port may use growable lists (but see
+§13).
 
 ### 6.4 Segment walk and frames (`Walker::run`, `Walker::frame`)
 
@@ -1143,7 +1143,7 @@ loop:
     ty = bn(HIDTYPE, 0, 2)
     if ty == 7 and bl == 8:
         for k in 0..4: bn(HIDDMG, k, 2)             // contexts k | (byte << 14)
-    elif ty == 1 and bl == 23 and (flags & SF_UCMD):
+    elif ty == 1 and bl == 23:
         usercmd()                                    // below
     elif ty == 3 and (flags & SF_DINFO):         // KTX demoinfo, from the share (§5.3)
         n = next 4 bytes of the share as u32le; error if missing or n != bl
@@ -1159,8 +1159,8 @@ is 0 or overruns the payload.)
 1 per player input when usercmd recording is on (`sv_user.c`
 `SV_DebugClientCommand`), 23 bytes: player u8, dropnum u8, msec u8, pitch,
 yaw and roll as f32le, forward, side and up moves as i16le, buttons u8,
-impulse u8. With `SF_UCMD` every such block of length 23 is coded field by
-field into stream UC; its angles that sit on the 360/65536 grid are left to
+impulse u8. Every hidden block of type 1 and length 23 is coded so, field
+by field into stream UC, whatever its bytes; its angles that sit on the 360/65536 grid are left to
 the numeric group of §7.6 (stream UC_A). The context's kind is in bits
 12-15:
 
@@ -1195,8 +1195,9 @@ power of two). The client sends its angles as 16-bit values and the server
 stores exactly that value × 360/65536, so in practice every angle is on
 the grid; -0.0, NaN, +180.0 and anything else are not, and are kept as
 their four bytes. The encoder computes the bits as just described
-(`walk.rs:on_grid`). Without `SF_UCMD`, or for any other length, a type-1
-block goes to `hid.misc` like every other block.
+(`walk.rs:on_grid`). A type-1 block of any other length goes to `hid.misc`
+like every other block. A segment without usercmd blocks has neither
+stream in its table.
 
 ### 6.12 Context summary for structural streams
 
@@ -1968,9 +1969,6 @@ of rule 10).
 3. **Demoinfo sharing**: a segment shares its KTX demoinfo blocks (flag
    `SF_DINFO`, only if it has any) if the store stays within 4 MiB with
    them; otherwise they stay in `hid.misc`.
-   **usercmd blocks**: flag `SF_UCMD` is set on a segment that has at
-   least one hidden block of type 1 and length 23 (§6.11); a segment
-   without one is written exactly as without the flag.
 4. **Back ends** (`segment.rs:pack_best`): normal level, structural and
    numeric streams: rans; if the model breaks M1 or M2, the smaller of
    store and zstd. Blobs, and every stream at the fast level: the smaller

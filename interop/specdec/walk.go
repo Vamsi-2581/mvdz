@@ -136,7 +136,6 @@ type Walker struct {
 	stls []StlRec
 	ucs  []UcRec
 
-	ucmd   bool // SF_UCMD: usercmd blocks field by field (FORMAT.md §6.11)
 	ucPrev [2]uint8
 	uc     [256]ucState
 
@@ -714,7 +713,7 @@ func (w *Walker) hidden() {
 			for k := uint32(0); k < 4; k++ {
 				w.bn(sHIDDMG, k, 2)
 			}
-		} else if w.ucmd && ty == 1 && bl == 23 {
+		} else if ty == 1 && bl == 23 {
 			w.usercmd()
 		} else if w.share && ty == 3 {
 			// FORMAT.md §5.3, §6.11: from the demoinfo share
@@ -737,7 +736,7 @@ func (w *Walker) hidden() {
 	}
 }
 
-// FORMAT.md §6.11, usercmd blocks (SF_UCMD)
+// FORMAT.md §6.11, usercmd blocks
 func (w *Walker) usercmd() {
 	p1, p2 := w.ucPrev[0], w.ucPrev[1]
 	pl := w.b8(sUC, uint32(min(p1, 31))|uint32(min(p2, 31))<<5)

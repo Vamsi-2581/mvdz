@@ -20,9 +20,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Segment flag: KTX demoinfo blocks come from the metadata's store.
 pub const SF_DINFO: u64 = 1;
-/// Segment flag: usercmd hidden blocks (type 1, 23 bytes) are coded field
-/// by field (streams UC and UC_A).
-pub const SF_UCMD: u64 = 4;
 
 /// Compression level: which back ends the encoder may use per stream.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -252,7 +249,6 @@ fn walk_dec<L: LazyCoder>(
     proto: Proto,
     tail: usize,
     dinfo: bool,
-    ucmd: bool,
 ) -> Result<()> {
     let io = DecIO {
         lazy,
@@ -260,7 +256,7 @@ fn walk_dec<L: LazyCoder>(
         over: false,
     };
     let mut w: Walker<false, DecIO<L>> =
-        Walker::new(&[], dst.ptr(), dst.len(), recs, io, proto, dinfo, ucmd);
+        Walker::new(&[], dst.ptr(), dst.len(), recs, io, proto, dinfo);
     w.run(tail);
     if w.err || w.io.over {
         return bad("structure");
@@ -301,8 +297,6 @@ pub struct Walked {
     tail: usize,
     proto0: Proto,
     dinfo: bool,
-    /// usercmd blocks coded field by field (SF_UCMD when any)
-    uc_n: usize,
 }
 
 impl Walked {
@@ -321,7 +315,7 @@ impl Walked {
 /// represent the segment.
 pub fn walk(src: &[u8], proto: Proto, dinfo: bool) -> Option<(Walked, Proto)> {
     let recs = Recs::growable(src.len());
-    let (io, tail, pend, err, uc_n) = {
+    let (io, tail, pend, err) = {
         let mut w: Walker<true, EncIO> = Walker::new(
             src,
             std::ptr::null_mut(),
@@ -330,10 +324,9 @@ pub fn walk(src: &[u8], proto: Proto, dinfo: bool) -> Option<(Walked, Proto)> {
             EncIO::new(),
             proto,
             dinfo,
-            true,
         );
         let tail = w.run(0);
-        (w.io, tail, w.proto, w.err, w.uc_n)
+        (w.io, tail, w.proto, w.err)
     };
     recs.finish();
     if err {
@@ -346,7 +339,6 @@ pub fn walk(src: &[u8], proto: Proto, dinfo: bool) -> Option<(Walked, Proto)> {
             tail,
             proto0: proto,
             dinfo,
-            uc_n,
         },
         pend,
     ))
@@ -488,9 +480,7 @@ pub fn encode(
     // the walk is the same either way and needs no metadata
     let share = wk.dinfo && !wk.dinfo().is_empty();
     let mut out = Vec::new();
-    // likewise SF_UCMD only when the segment has usercmd blocks
-    let ucmd = if wk.uc_n > 0 { SF_UCMD } else { 0 };
-    put_uv(&mut out, if share { SF_DINFO } else { 0 } | ucmd);
+    put_uv(&mut out, if share { SF_DINFO } else { 0 });
     put_uv(&mut out, if share { dinfo_off } else { 0 });
     put_uv(&mut out, wk.dinfo().len() as u64);
     put_uv(&mut out, wk.proto0.fte as u64);
@@ -573,7 +563,7 @@ pub fn parse_header(body: &[u8], raw_len: usize) -> Result<Header> {
     let mvd1 = r.u32v().ok_or(e)?;
     let tail = r.uz().ok_or(e)?;
     let n = r.uz().ok_or(e)?;
-    if flags & !(SF_DINFO | SF_UCMD) != 0 {
+    if flags & !SF_DINFO != 0 {
         return bad("segment flags");
     }
     if flags & SF_DINFO == 0 && (dinfo_off != 0 || dinfo_len != 0) {
@@ -657,7 +647,7 @@ pub fn decode(
         + 20 * cnt(SND_NUM)
         + 20 * cnt(TE_TYPE)
         + 8 * cnt(STL_IDX)
-        + 8 * (cnt(UC) / 12);
+        + 8 * (cnt(UC) / UC_MIN_SYMS);
     let mut scratch = recs_bytes as u64;
     for &(id, be, count, _) in &h.ents {
         scratch += if is_blob(id) && be == BE_ZSTD {
@@ -697,8 +687,7 @@ pub fn decode(
         cnt(SND_NUM),
         cnt(TE_TYPE),
         cnt(STL_IDX),
-        // every usercmd block codes at least 12 UC symbols
-        cnt(UC) / 12,
+        cnt(UC) / UC_MIN_SYMS,
     )?;
     let buf = Buf::new(dst);
     let run_g = |g: Group| -> Result<()> {
@@ -718,7 +707,6 @@ pub fn decode(
     };
     let blob_cell = std::sync::Mutex::new(Some(blob_bufs));
     let dinfo_on = h.flags & SF_DINFO != 0;
-    let ucmd_on = h.flags & SF_UCMD != 0;
     // the walk; a monomorphic fast path when every structural stream is rANS
     let walk = || -> Result<()> {
         let blobs = blob_cell
@@ -733,7 +721,7 @@ pub fn decode(
                     lazy[id] = rans::ByteDec::new(b, c, budget)?;
                 }
             }
-            walk_dec(lazy, blobs, buf, &recs, h.proto, h.tail, dinfo_on, ucmd_on)
+            walk_dec(lazy, blobs, buf, &recs, h.proto, h.tail, dinfo_on)
         } else {
             let mut lazy: [LazyDec; N_LAZY] = std::array::from_fn(|_| LazyDec::Empty);
             for (id, e) in lazy_ents.iter().enumerate() {
@@ -741,7 +729,7 @@ pub fn decode(
                     lazy[id] = LazyDec::new(be, b, c, budget)?;
                 }
             }
-            walk_dec(lazy, blobs, buf, &recs, h.proto, h.tail, dinfo_on, ucmd_on)
+            walk_dec(lazy, blobs, buf, &recs, h.proto, h.tail, dinfo_on)
         }
     };
     if threads > 1 && HAS_THREADS {
@@ -855,7 +843,7 @@ mod tests {
         }
     }
     /// usercmd hidden blocks (type 1): on and off the grid, other lengths,
-    /// two in one payload; SF_UCMD only where a segment has one.
+    /// two in one payload; streams UC and UC_A only where a segment has one.
     #[test]
     fn usercmd_round_trip() {
         let mut src = demo();
@@ -901,19 +889,20 @@ mod tests {
         for &level in levels {
             for threads in [1, 3] {
                 let (wk, _) = walk(&src, Proto::default(), true).unwrap();
-                assert_eq!(wk.uc_n, 300 + 9);
                 let body = encode(&src, &wk, level, 0, 1, &mut Vec::new());
                 let h = parse_header(&body, src.len()).unwrap();
-                assert_eq!(h.flags, SF_UCMD);
+                let uc = h.ents.iter().find(|e| e.0 == UC).unwrap().2;
+                assert!(uc >= (300 + 9) * UC_MIN_SYMS, "{uc}");
                 let mut dst = vec![0u8; src.len()];
                 decode(&body, &h, &mut dst, &[], threads, &Budget::unlimited()).unwrap();
                 assert!(dst == src, "{level:?} {threads}");
             }
         }
-        // without usercmd blocks the flag stays clear
+        // without usercmd blocks neither stream is in the table
         let plain = demo();
         let (wk, _) = walk(&plain, Proto::default(), true).unwrap();
         let body = encode(&plain, &wk, Level::Normal, 0, 1, &mut Vec::new());
-        assert_eq!(parse_header(&body, plain.len()).unwrap().flags, 0);
+        let h = parse_header(&body, plain.len()).unwrap();
+        assert!(h.ents.iter().all(|e| e.0 != UC && e.0 != UC_A));
     }
 }
