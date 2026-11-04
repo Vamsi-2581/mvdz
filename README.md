@@ -323,8 +323,8 @@ sticky, buffers are freed with `mvdz_free` (but the static strings of
 normally (no `longjmp`) and must not call back into their own handle.
 `mvdz_writer_write` codes each segment on the calling thread when it
 fills, about 0.15 s per MiB at the normal level (0.08 s at the fast
-level): a server should feed the
-writer from a recording thread, not from its frame loop.
+level): a server should feed the writer from a recording thread, not
+from its frame loop.
 Attachments are listed in the JSON of `mvdz_info_json`, read with
 `mvdz_attachment_read` (which needs both read and seek callbacks), and
 filtered into a copy with `mvdz_attachments_export`.

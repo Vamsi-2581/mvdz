@@ -7,23 +7,21 @@
   `compress -s` at the normal level builds one model per rANS stream from
   that stream's symbols in every segment, stores the models once, before
   the first segment, and every segment codes those streams with them.
-  Segments stay independently decodable. `-s 1M` is 0.213 of raw on the
-  stratified sample instead of 0.219 (1 MiB segments now cost 0.9 % over
-  one segment, not 3.8 %); full-size 4on4 demos shrink by 4.6 % at
-  `-s 1M` and 14 % at `-s 64K`. Whole files, the fast level and the
+  Segments stay independently decodable. On the stratified sample
+  (archive-weighted) `-s 256K` is 0.218 of raw instead of 0.235 and `-s 1M`
+  0.213 instead of 0.219 (1 MiB segments now cost 0.9 % over one segment,
+  not 3.8 %); full-size 4on4 demos shrink by 14 % at `-s 64K`, 9 % at
+  `-s 256K` and 4.6 % at `-s 1M`. Whole files, the fast level and the
   streaming writer do not use TABLES. Readers only check the section when
   they open a file; the models are built once, under the reader's
   budget, when the first segment that uses them is decoded, so metadata
-  and attachment tools never build them. At `-s 1M`, one thread, on set8
-  and the three 4on4s (58.9 MB raw): decoding 24.8 to 27.2 MB/s (each
-  model is built once per file, not per segment), compression 5.4 to
-  5.2 MB/s. Compression now holds every segment's symbols until the
-  models are built: the peak for a 14 MB 4on4 demo at `-s 1M` is 156 MB
-  (84 MB without shared models, 133 MB for one segment), at `-s 64K`
-  172 MB (95 MB). Attachment updates now read the file under the default
-  limits. The C header's cost of the streaming writer is corrected: about
-  0.25 s per MiB at the normal level and 0.08 s at the fast level (one
-  core), not 0.15-0.2 s and 0.5 s.
+  and attachment tools never build them. At `-s 256K`, one thread, on
+  set8: compression 6.1 to 8.2 MB/s (no model is built per segment),
+  decoding 22.8 to 25.3 MB/s. The models are trained from per-context
+  counts summed over the segments; compressing a 14.2 MB 4on4 demo with
+  one thread peaks at 109 MB at `-s 256K` and 105 MB at `-s 1M` (87 MB
+  without shared models, 133 MB for one segment). Attachment updates now
+  read the file under the default limits.
 
 * **usercmd blocks coded field by field** (format change: streams `uc`
   and `uc.a`; FORMAT.md §6.11, §7.6). mvdsv can record every player
