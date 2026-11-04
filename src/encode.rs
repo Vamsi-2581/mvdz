@@ -9,7 +9,8 @@ use crate::error::{Error, Result};
 use crate::format::*;
 use crate::proto::Proto;
 use crate::segment::{self, Level, StreamStat, Walked, cut_points, frame_scan};
-use crate::util::{crc32, par_map, put_uv};
+use crate::segment::{SegNums, Trained};
+use crate::util::{crc32, par_map};
 
 /// Compression settings.
 #[derive(Clone, Debug)]
@@ -112,7 +113,8 @@ pub fn raw_body(s: &[u8], level: Level, raw_off: u64, t_start: u64) -> Vec<u8> {
 }
 
 /// The SEGMENT section body of a walked segment, or None if it breaks the
-/// ratio limit; `shared`: the file's shared models (empty: none).
+/// ratio limit; `file`: the file's shared models and the segment's
+/// numeric symbols ([`segment::encode`]).
 #[allow(clippy::too_many_arguments)]
 pub fn transform_body(
     s: &[u8],
@@ -123,12 +125,10 @@ pub fn transform_body(
     dinfo_off: u64,
     threads: usize,
     st: &mut Vec<StreamStat>,
-    shared: &[Option<Shared>],
+    file: Option<(&[Option<Shared>], &SegNums)>,
 ) -> Option<Vec<u8>> {
     let mut b = seg_hdr_bytes(raw_off, s.len() as u64, t_start, crc32(s), C_TRANSFORM);
-    b.extend_from_slice(&segment::encode(
-        s, wk, level, dinfo_off, threads, st, shared,
-    ));
+    b.extend_from_slice(&segment::encode(s, wk, level, dinfo_off, threads, st, file));
     seg_ratio_ok(s.len() as u64, b.len() as u64).then_some(b)
 }
 
@@ -169,15 +169,15 @@ fn compress_inner(src: &[u8], cfg: &Config, force_raw: bool) -> Result<(Vec<u8>,
     };
     // a segmented file at the normal level: one model per rANS stream from
     // its symbols in every segment, in the TABLES section (FORMAT.md §12)
-    let shared = if cfg.level == Level::Normal && nseg > 1 && !force_raw {
-        let segs: Vec<(&[u8], &Walked)> = plans
+    let trained = if cfg.level == Level::Normal && nseg > 1 && !force_raw {
+        let segs: Vec<Option<(&[u8], &Walked)>> = plans
             .iter()
             .enumerate()
-            .filter_map(|(i, p)| Some((&src[cuts[i]..cuts[i + 1]], p.walked.as_ref()?)))
+            .map(|(i, p)| Some((&src[cuts[i]..cuts[i + 1]], p.walked.as_ref()?)))
             .collect();
-        segment::train(&segs, threads)
+        Some(segment::train(&segs, threads))
     } else {
-        Vec::new()
+        None
     };
     // segments the transform could not code: raw from the start
     let mut raw: Vec<bool> = plans
@@ -186,7 +186,15 @@ fn compress_inner(src: &[u8], cfg: &Config, force_raw: bool) -> Result<(Vec<u8>,
         .collect();
     for _round in 0..2 {
         let (out, info) = assemble(
-            src, &cuts, &plans, &raw, &md0, cfg.level, &shared, outer, inner,
+            src,
+            &cuts,
+            &plans,
+            &raw,
+            &md0,
+            cfg.level,
+            trained.as_ref(),
+            outer,
+            inner,
         )?;
         if !cfg.verify {
             return Ok((out, info));
@@ -218,7 +226,7 @@ fn assemble(
     raw: &[bool],
     md0: &Metadata,
     level: Level,
-    shared: &[Option<Shared>],
+    trained: Option<&Trained>,
     outer: usize,
     inner: usize,
 ) -> Result<(Vec<u8>, Info)> {
@@ -244,7 +252,7 @@ fn assemble(
                 doff[i],
                 inner,
                 &mut st,
-                shared,
+                trained.and_then(|t| Some((&t.models[..], t.nums[i].as_ref()?))),
             ) {
                 return (b, false, st);
             }
@@ -264,11 +272,12 @@ fn assemble(
     }
     if md_final.demoinfo != md.demoinfo {
         let raw2: Vec<bool> = bodies.iter().map(|b| b.1).collect();
-        return assemble(src, cuts, plans, &raw2, md0, level, shared, outer, inner);
+        return assemble(src, cuts, plans, &raw2, md0, level, trained, outer, inner);
     }
     let mut out = prefix(0, PREFIX_LEN as u64);
     section(&mut out, K_META, &md.encode_for(level)?);
     // TABLES: the shared model of every stream some segment codes with it
+    let shared = trained.map_or(&[][..], |t| &t.models[..]);
     let mut used = vec![false; shared.len()];
     for st in bodies.iter().flat_map(|b| &b.2) {
         if st.be == BE_FILE {
@@ -277,18 +286,7 @@ fn assemble(
     }
     let ids: Vec<usize> = (0..used.len()).filter(|&sid| used[sid]).collect();
     if !ids.is_empty() {
-        let mut t = Vec::new();
-        put_uv(&mut t, ids.len() as u64);
-        for sid in ids {
-            let h = &shared[sid]
-                .as_ref()
-                .expect("a back end 3 stream's model")
-                .hdr;
-            put_uv(&mut t, sid as u64);
-            put_uv(&mut t, h.len() as u64);
-            t.extend_from_slice(h);
-        }
-        section(&mut out, K_TABLES, &t);
+        section(&mut out, K_TABLES, &segment::tables_body(shared, &ids));
     }
     let mut index = Index {
         size: src.len() as u64,

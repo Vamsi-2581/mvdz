@@ -80,18 +80,11 @@ pub fn encode_lazy(
     }
 }
 
-pub fn encode_num(
-    be: u8,
-    sid: usize,
-    vals: &[(NCtx, i32)],
-    zlevel: i32,
-    file: Option<&rans::Shared>,
-) -> Option<Vec<u8>> {
+pub fn encode_num(be: u8, sid: usize, vals: &[(NCtx, i32)], zlevel: i32) -> Option<Vec<u8>> {
     match be {
         BE_STORE => Some(leb_vals(vals)),
         BE_ZSTD => Some(crate::zst::compress(&leb_vals(vals), zlevel)),
-        BE_RANS => rans::encode_num(sid, vals, None),
-        BE_FILE => rans::encode_num(sid, vals, Some(file?)),
+        BE_RANS => rans::encode_num(sid, vals),
         _ => None,
     }
 }

@@ -177,30 +177,89 @@ struct Counts {
     rest: Vec<u32>,
 }
 
-fn count_and_select(syms: &[(u32, u16)], alpha: usize) -> Counts {
-    let per_sym = TABLE_BITS_PER_SYM.load(std::sync::atomic::Ordering::Relaxed) as f64;
-    let maxc = syms.iter().map(|&(c, _)| c).max().unwrap_or(0) as usize;
-    // row_of, is_own and the model's map are dense arrays sized by the
-    // largest context; contexts are 16-bit by spec (§6.12).
-    assert!(maxc <= 0xffff, "context {maxc:#x} over 16 bits");
-    let mut row_of = vec![u32::MAX; maxc + 1];
-    let mut rows: Vec<u32> = Vec::new();
-    let mut keys: Vec<u32> = Vec::new();
-    let mut global = vec![0u32; alpha];
-    for &(c, s) in syms {
-        let r = row_of[c as usize];
-        let r = if r == u32::MAX {
-            let r = keys.len() as u32;
-            row_of[c as usize] = r;
-            keys.push(c);
-            rows.resize(rows.len() + alpha, 0);
-            r
-        } else {
-            r
-        };
-        rows[r as usize * alpha + s as usize] += 1;
-        global[s as usize] += 1;
+/// Per-context symbol counts of a stream, summed over any number of symbol
+/// lists (the segments of a file, for its shared model).
+pub struct Tally {
+    alpha: usize,
+    row_of: Vec<u32>,
+    keys: Vec<u32>,
+    rows: Vec<u32>,
+    global: Vec<u32>,
+}
+
+impl Tally {
+    pub fn new(alpha: usize) -> Tally {
+        Tally {
+            alpha,
+            row_of: Vec::new(),
+            keys: Vec::new(),
+            rows: Vec::new(),
+            global: vec![0; alpha],
+        }
     }
+
+    pub fn add(&mut self, syms: &[(u32, u16)]) {
+        let alpha = self.alpha;
+        let maxc = syms.iter().map(|&(c, _)| c).max().unwrap_or(0) as usize;
+        // row_of, is_own and the model's map are dense arrays sized by the
+        // largest context; contexts are 16-bit by spec (§6.12).
+        assert!(maxc <= 0xffff, "context {maxc:#x} over 16 bits");
+        if self.row_of.len() <= maxc {
+            self.row_of.resize(maxc + 1, u32::MAX);
+        }
+        let (row_of, rows, keys, global) = (
+            &mut self.row_of,
+            &mut self.rows,
+            &mut self.keys,
+            &mut self.global,
+        );
+        for &(c, s) in syms {
+            let r = row_of[c as usize];
+            let r = if r == u32::MAX {
+                let r = keys.len() as u32;
+                row_of[c as usize] = r;
+                keys.push(c);
+                rows.resize(rows.len() + alpha, 0);
+                r
+            } else {
+                r
+            };
+            rows[r as usize * alpha + s as usize] += 1;
+            global[s as usize] += 1;
+        }
+    }
+
+    /// The shared model of these counts (a stream's in every segment of a
+    /// file): the quantisation with the smaller estimated coded size, or
+    /// None if neither model is allowed (rule M2).
+    pub fn shared(&self) -> Option<Shared> {
+        let c = select(self);
+        let mut best: Option<(f64, Shared)> = None;
+        for steps in [2u32, 4] {
+            let model = build_model(&c, steps);
+            let Some(hdr) = header(&model) else {
+                continue;
+            };
+            let bits = 8.0 * hdr.len() as f64 + coded_bits(&model, &c);
+            if best.as_ref().is_none_or(|b| bits < b.0) {
+                best = Some((bits, Shared { model, hdr }));
+            }
+        }
+        best.map(|b| b.1)
+    }
+}
+
+fn count_and_select(syms: &[(u32, u16)], alpha: usize) -> Counts {
+    let mut t = Tally::new(alpha);
+    t.add(syms);
+    select(&t)
+}
+
+/// The tables of a model of these counts: own contexts and the fallback's
+/// counts.
+fn select(t: &Tally) -> Counts {
+    let per_sym = TABLE_BITS_PER_SYM.load(std::sync::atomic::Ordering::Relaxed) as f64;
+    let (alpha, row_of, rows, keys) = (t.alpha, &t.row_of, &t.rows, &t.keys);
     let row = |k: u32| &rows[row_of[k as usize] as usize * alpha..][..alpha];
     // selection order is part of the output: most frequent context first
     let totals: Vec<u32> = keys.iter().map(|&k| row(k).iter().sum()).collect();
@@ -208,7 +267,7 @@ fn count_and_select(syms: &[(u32, u16)], alpha: usize) -> Counts {
     order.sort_by_key(|&i| (std::cmp::Reverse(totals[i]), keys[i]));
     let keys: Vec<u32> = order.iter().map(|&i| keys[i]).collect();
     let mut own: Vec<u32> = Vec::new();
-    let mut fb = global.clone();
+    let mut fb = t.global.clone();
     for pass in 0..2 {
         own.clear();
         let mut rest = vec![0u32; alpha];
@@ -232,7 +291,7 @@ fn count_and_select(syms: &[(u32, u16)], alpha: usize) -> Counts {
         }
     }
     own.sort();
-    let mut is_own = vec![false; maxc + 1];
+    let mut is_own = vec![false; row_of.len()];
     for &k in &own {
         is_own[k as usize] = true;
     }
@@ -282,6 +341,23 @@ fn build_model(c: &Counts, steps: u32) -> Model {
         map,
         tables,
     }
+}
+
+/// The bits the rANS body of the counted symbols takes with `m`, the
+/// model built from `c` (without the coder's flush).
+fn coded_bits(m: &Model, c: &Counts) -> f64 {
+    let bits = |t: &Table, n: &[u32]| -> f64 {
+        n.iter()
+            .zip(&t.freq)
+            .filter(|&(&n, _)| n > 0)
+            .map(|(&n, &f)| n as f64 * (SCALE as f64 - (f as f64).log2()))
+            .sum()
+    };
+    let a = c.alpha;
+    bits(&m.tables[0], &c.rest)
+        + (0..c.own.len())
+            .map(|i| bits(&m.tables[i + 1], &c.own_counts[i * a..(i + 1) * a]))
+            .sum::<f64>()
 }
 
 // --------------------------------------------------------------- model I/O
@@ -710,27 +786,37 @@ fn rans_encode(model: &Model, syms: &[(u32, u16)]) -> Vec<u8> {
     e.finish()
 }
 
-/// `rans_len uv | rans | extra`: a stream body without its model header.
-fn pack_body(model: &Model, syms: &[(u32, u16)], extra: &[u8]) -> Vec<u8> {
+/// Appends `rans_len uv | rans | extra`: a stream body after its model
+/// header.
+fn put_body(out: &mut Vec<u8>, model: &Model, syms: &[(u32, u16)], extra: &[u8]) {
     let body = rans_encode(model, syms);
-    let mut out = Vec::with_capacity(body.len() + extra.len() + 4);
-    put_uv(&mut out, body.len() as u64);
+    out.reserve(body.len() + extra.len() + 4);
+    put_uv(out, body.len() as u64);
     out.extend_from_slice(&body);
     out.extend_from_slice(extra);
+}
+
+/// A back end 3 stream body: no model header.
+fn pack_body(model: &Model, syms: &[(u32, u16)], extra: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_body(&mut out, model, syms, extra);
     out
+}
+
+/// The model header, or None if it breaks the decision limit (rule M2).
+fn header(model: &Model) -> Option<Vec<u8>> {
+    let (hdr, decisions) = write_model(model);
+    (decisions <= (hdr.len() as u64) * DEC_PER_BYTE + DEC_BASE).then_some(hdr)
 }
 
 /// `hdr_len uv | hdr | rans_len uv | rans | extra`, or None if the model
 /// header breaks the decision limit (rule M2).
 fn pack(model: &Model, syms: &[(u32, u16)], extra: &[u8]) -> Option<Vec<u8>> {
-    let (hdr, decisions) = write_model(model);
-    if decisions > (hdr.len() as u64) * DEC_PER_BYTE + DEC_BASE {
-        return None;
-    }
-    let mut out = Vec::new();
+    let hdr = header(model)?;
+    let mut out = Vec::with_capacity(hdr.len() + 4);
     put_uv(&mut out, hdr.len() as u64);
     out.extend_from_slice(&hdr);
-    out.extend_from_slice(&pack_body(model, syms, extra));
+    put_body(&mut out, model, syms, extra);
     Some(out)
 }
 
@@ -767,16 +853,16 @@ fn unpack<'a>(
     })
 }
 
-/// The smaller of the two quantisations and its packed stream, or None if
-/// neither model is allowed (the caller then uses another back end).
-fn best(syms: &[(u32, u16)], alpha: usize, extra: &[u8]) -> Option<(Model, Vec<u8>)> {
-    let mut best: Option<(Model, Vec<u8>)> = None;
+/// The smaller of the two quantisations, or None if neither model is
+/// allowed (the caller then uses another back end).
+fn best_pack(syms: &[(u32, u16)], alpha: usize, extra: &[u8]) -> Option<Vec<u8>> {
+    let mut best: Option<Vec<u8>> = None;
     let counts = count_and_select(syms, alpha);
     for steps in [2u32, 4] {
         let m = build_model(&counts, steps);
         if let Some(p) = pack(&m, syms, extra) {
-            if best.as_ref().is_none_or(|b| p.len() < b.1.len()) {
-                best = Some((m, p));
+            if best.as_ref().is_none_or(|b| p.len() < b.len()) {
+                best = Some(p);
             }
         }
     }
@@ -785,20 +871,13 @@ fn best(syms: &[(u32, u16)], alpha: usize, extra: &[u8]) -> Option<(Model, Vec<u
 
 // --------------------------------------------------------------- file models
 
-/// A model built from one stream's symbols in every segment of a file: its
-/// TABLES entry (FORMAT.md §2.6), used by back end 3.
+/// A model built from one stream's symbols in every segment of a file
+/// ([`Tally::shared`]): its TABLES entry (FORMAT.md §2.6), used by back
+/// end 3.
 pub struct Shared {
     model: Model,
     /// the model header
     pub hdr: Vec<u8>,
-}
-
-/// The shared model of a stream from its (context, symbol) pairs in all
-/// segments, chosen as for one segment (`best`).
-pub fn train(syms: &[(u32, u16)], alpha: usize) -> Option<Shared> {
-    let (model, p) = best(syms, alpha, &[])?;
-    let hdr = Rd::new(&p).bytes()?.to_vec();
-    Some(Shared { model, hdr })
 }
 
 /// The decoder models of a file, by stream id.
@@ -897,7 +976,7 @@ pub fn encode_bytes(syms: &[u8], ctxs: &[u32], file: Option<&Shared>) -> Option<
     let v = byte_syms(syms, ctxs);
     match file {
         Some(sh) => Some(pack_body(&sh.model, &v, &[])),
-        None => best(&v, 256, &[]).map(|b| b.1),
+        None => best_pack(&v, 256, &[]),
     }
 }
 
@@ -1059,7 +1138,7 @@ impl<'a> BitR<'a> {
 }
 
 /// The (context, bucket) pairs of a numeric stream and its mantissa bits.
-pub fn num_syms(sid: usize, vals: &[(NCtx, i32)]) -> (Vec<(u32, u16)>, Vec<u8>) {
+fn num_syms(sid: usize, vals: &[(NCtx, i32)]) -> (Vec<(u32, u16)>, Vec<u8>) {
     let mut syms = Vec::with_capacity(vals.len());
     let mut bw = BitW::default();
     for (c, v) in vals {
@@ -1070,13 +1149,50 @@ pub fn num_syms(sid: usize, vals: &[(NCtx, i32)]) -> (Vec<(u32, u16)>, Vec<u8>) 
     (syms, bw.finish())
 }
 
-/// A numeric stream with its own model, or with the file's model `file`
-/// (back end 3).
-pub fn encode_num(sid: usize, vals: &[(NCtx, i32)], file: Option<&Shared>) -> Option<Vec<u8>> {
+pub fn encode_num(sid: usize, vals: &[(NCtx, i32)]) -> Option<Vec<u8>> {
     let (syms, extra) = num_syms(sid, vals);
-    match file {
-        Some(sh) => Some(pack_body(&sh.model, &syms, &extra)),
-        None => best(&syms, NALPHA, &extra).map(|b| b.1),
+    best_pack(&syms, NALPHA, &extra)
+}
+
+/// A numeric stream's symbols, kept between training a file's models and
+/// coding its segments: contexts (16-bit), buckets and mantissa bits, 3
+/// bytes a value and its bits instead of the 12 of its (NCtx, i32).
+pub struct NumSyms {
+    ctxs: Vec<u16>,
+    buckets: Vec<u8>,
+    bits: Vec<u8>,
+}
+
+impl NumSyms {
+    pub fn new(sid: usize, vals: &[(NCtx, i32)]) -> NumSyms {
+        let (v, bits) = num_syms(sid, vals);
+        NumSyms {
+            // contexts are 16-bit by spec (§6.12), as `Tally::add` asserts
+            ctxs: v
+                .iter()
+                .map(|&(c, _)| u16::try_from(c).expect("context over 16 bits"))
+                .collect(),
+            buckets: v.iter().map(|&(_, b)| b as u8).collect(),
+            bits,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.ctxs.len()
+    }
+
+    /// The (context, bucket) pairs.
+    pub fn pairs(&self) -> Vec<(u32, u16)> {
+        self.ctxs
+            .iter()
+            .zip(&self.buckets)
+            .map(|(&c, &b)| (c as u32, b as u16))
+            .collect()
+    }
+
+    /// The stream coded with the file's model (back end 3).
+    pub fn encode(&self, file: &Shared) -> Vec<u8> {
+        pack_body(&file.model, &self.pairs(), &self.bits)
     }
 }
 
@@ -1184,7 +1300,7 @@ mod tests {
                 )
             })
             .collect();
-        let b = encode_num(PI_OX, &vals, None).unwrap();
+        let b = encode_num(PI_OX, &vals).unwrap();
         let budget = Budget::unlimited();
         let mut d = NumDec::new(PI_OX, &b, vals.len(), None, &budget).unwrap();
         for &(c, v) in &vals {

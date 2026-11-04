@@ -181,7 +181,7 @@ impl<W: Write> StreamEncoder<W> {
                 doff,
                 self.cfg.threads.max(1),
                 &mut st,
-                &[],
+                None,
             ) {
                 share = wk.dinfo();
                 body = Some(b);
