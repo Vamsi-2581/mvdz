@@ -649,7 +649,7 @@ pub fn parse_seg_hdr(b: &[u8]) -> Result<SegHdr> {
             let flags = r.uv().ok_or(e)?;
             let off = r.uv().ok_or(e)?;
             let len = r.uv().ok_or(e)?;
-            if flags & !crate::segment::SF_DINFO != 0 {
+            if flags & !(crate::segment::SF_DINFO | crate::segment::SF_UCMD) != 0 {
                 return bad("segment flags");
             }
             if flags & crate::segment::SF_DINFO != 0 {

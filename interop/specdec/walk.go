@@ -36,6 +36,7 @@ const (
 	sTEMISC
 	sPRLEVEL
 	sFRAGS
+	sUC
 )
 
 const (
@@ -86,6 +87,17 @@ type StlRec struct {
 	key uint16
 }
 
+// UcRec: a usercmd block with angles on the grid (FORMAT.md §6.11).
+type UcRec struct {
+	off       uint32
+	num, grid uint8
+}
+
+type ucState struct {
+	drop, msec, grid, buttons, impulse uint8
+	mv                                 [3]uint16
+}
+
 type plState struct {
 	flags     uint16
 	frame, wf uint8
@@ -122,6 +134,11 @@ type Walker struct {
 	snds []SndRec
 	tes  []TeRec
 	stls []StlRec
+	ucs  []UcRec
+
+	ucmd   bool // SF_UCMD: usercmd blocks field by field (FORMAT.md §6.11)
+	ucPrev [2]uint8
+	uc     [256]ucState
 
 	share    bool // demoinfo blocks from the share (FORMAT.md §5.3)
 	dinfo    *rd
@@ -697,6 +714,8 @@ func (w *Walker) hidden() {
 			for k := uint32(0); k < 4; k++ {
 				w.bn(sHIDDMG, k, 2)
 			}
+		} else if w.ucmd && ty == 1 && bl == 23 {
+			w.usercmd()
 		} else if w.share && ty == 3 {
 			// FORMAT.md §5.3, §6.11: from the demoinfo share
 			if w.dinfo == nil {
@@ -716,4 +735,39 @@ func (w *Walker) hidden() {
 			w.blob(bHIDMISC, int(bl))
 		}
 	}
+}
+
+// FORMAT.md §6.11, usercmd blocks (SF_UCMD)
+func (w *Walker) usercmd() {
+	p1, p2 := w.ucPrev[0], w.ucPrev[1]
+	pl := w.b8(sUC, uint32(min(p1, 31))|uint32(min(p2, 31))<<5)
+	w.ucPrev = [2]uint8{pl, p1}
+	s := &w.uc[pl]
+	s.drop = w.b8(sUC, 1<<12|uint32(s.drop))
+	s.msec = w.b8(sUC, 2<<12|uint32(s.msec))
+	grid := w.sym(sUC, 3<<12|uint32(s.grid))
+	if grid > 7 {
+		fail("usercmd grid flags %d", grid)
+	}
+	s.grid = grid
+	off := uint32(w.p)
+	for a := uint32(0); a < 3; a++ {
+		if grid&(1<<a) != 0 {
+			w.reserve(4)
+		} else {
+			for k := uint32(0); k < 4; k++ {
+				w.b8(sUC, 4<<12|a<<2|k)
+			}
+		}
+	}
+	if grid != 0 {
+		w.ucs = append(w.ucs, UcRec{off, pl, grid})
+	}
+	for m := uint32(0); m < 3; m++ {
+		lo := w.b8(sUC, 5<<12|m<<8|uint32(s.mv[m]&0xff))
+		hi := w.b8(sUC, 6<<12|m<<8|uint32(lo))
+		s.mv[m] = uint16(lo) | uint16(hi)<<8
+	}
+	s.buttons = w.b8(sUC, 7<<12|uint32(s.buttons))
+	s.impulse = w.b8(sUC, 8<<12|uint32(s.impulse))
 }

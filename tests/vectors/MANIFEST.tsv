@@ -23,6 +23,10 @@ random.stored.mvdz	2d2506480b05f18be895b70c6faeb3b52ad41b68438da3aa23da98961a145
 empty.normal.mvdz	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	0	an empty demo
 empty.streamed.mvdz	e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	0	an empty demo, Writer (no segment)
 start-u64.normal.mvdz	249a09bb6c6ec8b9b81d33f8c6bf8972f9f1e896873277d76e4819e47599e523	5502	synthetic demo with a 0x000B start timestamp in the 8-byte u64le form (META tag 11 = 1778675998090)
+usercmd.normal.mvdz	85598f84014a7db074614dc585a421db11e52ea0e2ff21aba59f80ee9f447cd3	29377	synthetic demo with usercmd hidden blocks (4 players, angles on and off the grid, other type-1 lengths)
+usercmd.fast.mvdz	85598f84014a7db074614dc585a421db11e52ea0e2ff21aba59f80ee9f447cd3	29377	the same, --fast
+usercmd.normal.seg8k.mvdz	85598f84014a7db074614dc585a421db11e52ea0e2ff21aba59f80ee9f447cd3	29377	the same, -s 8K
+usercmd.normal.streamed.mvdz	85598f84014a7db074614dc585a421db11e52ea0e2ff21aba59f80ee9f447cd3	29377	the same, Writer, segment 8K
 hostile-base-cut.mvdz	error: corrupt: incomplete file (no trailer)	-	a small valid file cut in half (no trailer)
 hostile-no-trailer.mvdz	error: corrupt: incomplete file (no trailer)	-	complete sections, INDEX included, but no trailer
 hostile-after-trailer.mvdz	error: corrupt: trailer not at the end	-	one byte after the trailer
@@ -45,3 +49,5 @@ hostile-zstd-legacy.mvdz	error: corrupt: zstd data	-	META as a legacy (v0.7) zst
 hostile-zstd-window.mvdz	error: corrupt: zstd data	-	a zstd segment whose frame declares a 2^40-byte window
 hostile-share-empty.mvdz	error: corrupt: demoinfo share	-	a segment flagged as sharing demoinfo with an empty share
 hostile-meta-no-timing.mvdz	error: corrupt: metadata identity	-	META without tag 8 (timing)
+hostile-ucmd-flag-clear.mvdz	error: corrupt: structure	-	a segment with usercmd blocks coded field by field, flag SF_UCMD cleared
+hostile-ucmd-grid.mvdz	error: corrupt: structure	-	a usercmd block whose grid flags symbol is 9 (stored streams)

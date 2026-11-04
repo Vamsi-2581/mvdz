@@ -442,6 +442,70 @@ fn hostile(v: &mut Vec<Vector>) {
         build(0, true, &st8, true),
         "META without tag 8 (timing)",
     );
+    // usercmd blocks coded field by field, the segment's SF_UCMD cleared:
+    // the walk sends them to hid.misc, which is absent
+    let uc = usercmd_demo();
+    let ucc = mvdz::compress(&uc, &c(Level::Normal, 0)).unwrap();
+    let mut su = sections(&ucc);
+    let iu = su.iter().position(|s| s.0 == K_SEGMENT).unwrap();
+    let hu = parse_seg_hdr(&su[iu].1).unwrap();
+    assert_eq!(su[iu].1[hu.body_off], mvdz::segment::SF_UCMD as u8);
+    su[iu].1[hu.body_off] = 0;
+    add(
+        "ucmd-flag-clear",
+        build(0, true, &su, true),
+        "a segment with usercmd blocks coded field by field, flag SF_UCMD cleared",
+    );
+    // one usercmd whose grid symbol is 9 (stored streams)
+    let mut one = Demo(Vec::new());
+    one.hidden(
+        0,
+        &[(1, &usercmd_block(0, 0, 13, [0.0; 3], [0; 3], [0, 0]))],
+    );
+    let one = one.0;
+    let oc = mvdz::encode::compress(&one, &c(Level::Normal, 0))
+        .unwrap()
+        .0;
+    let mut so = sections(&oc);
+    let io = so.iter().position(|s| s.0 == K_SEGMENT).unwrap();
+    let streams: [(usize, &[u8]); 7] = [
+        (mvdz::streams::TIME, &[0]),
+        (mvdz::streams::TYPE, &[3]),
+        (mvdz::streams::MASK, &[0; 4]),
+        (mvdz::streams::HIDTAG, &[1, 2]),
+        (mvdz::streams::HIDLEN, &[23, 0, 0, 0]),
+        (mvdz::streams::HIDTYPE, &[1, 0]),
+        (mvdz::streams::UC, &[0, 0, 13, 9]),
+    ];
+    let mut body = Vec::new();
+    for x in [
+        mvdz::segment::SF_UCMD,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        streams.len() as u64,
+    ] {
+        put_uv(&mut body, x);
+    }
+    for (id, b) in &streams {
+        for x in [*id as u64, 0, b.len() as u64, b.len() as u64] {
+            put_uv(&mut body, x);
+        }
+    }
+    for (_, b) in &streams {
+        body.extend_from_slice(b);
+    }
+    let mut b = seg_hdr_bytes(0, one.len() as u64, 0, mvdz::util::crc32(&one), C_TRANSFORM);
+    b.extend_from_slice(&body);
+    so[io] = (K_SEGMENT, b);
+    add(
+        "ucmd-grid",
+        build(0, true, &so, true),
+        "a usercmd block whose grid flags symbol is 9 (stored streams)",
+    );
 }
 
 /// The raw fields of a META.
@@ -714,6 +778,31 @@ fn all_vectors() -> Option<Vec<Vector>> {
         sc,
         &su,
         "synthetic demo with a 0x000B start timestamp in the 8-byte u64le form (META tag 11 = 1778675998090)",
+    );
+    let uc = usercmd_demo();
+    add(
+        "usercmd.normal.mvdz",
+        one(&uc, c(Level::Normal, 0)),
+        &uc,
+        "synthetic demo with usercmd hidden blocks (4 players, angles on and off the grid, other type-1 lengths)",
+    );
+    add(
+        "usercmd.fast.mvdz",
+        one(&uc, c(Level::Fast, 0)),
+        &uc,
+        "the same, --fast",
+    );
+    add(
+        "usercmd.normal.seg8k.mvdz",
+        one(&uc, c(Level::Normal, 8192)),
+        &uc,
+        "the same, -s 8K",
+    );
+    add(
+        "usercmd.normal.streamed.mvdz",
+        st(&uc, c(Level::Normal, 8192)),
+        &uc,
+        "the same, Writer, segment 8K",
     );
     hostile(&mut v);
     Some(v)

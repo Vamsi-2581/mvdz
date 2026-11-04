@@ -1,5 +1,10 @@
 package main
 
+import (
+	"encoding/binary"
+	"math"
+)
+
 // Numeric groups: FORMAT.md §7.
 
 // Numeric stream ids (FORMAT.md §5.4).
@@ -12,6 +17,7 @@ const (
 	nSTL  = 59
 	nPIF  = 60
 	nPEF  = 63
+	nUCA  = 66
 )
 
 type valFn func(L int, f [6]uint8, lane int) int32
@@ -208,6 +214,31 @@ func stlAll(out []byte, recs []StlRec, val valFn) {
 	}
 }
 
+// FORMAT.md §7.x: usercmd angles, s * 45/8192 as f32 (exact)
+func ucAll(out []byte, recs []UcRec, val valFn) {
+	var tr [256][3]Track
+	for _, r := range recs {
+		for a := 0; a < 3; a++ {
+			if r.grid&(1<<a) == 0 {
+				continue
+			}
+			t := &tr[r.num][a]
+			d := int32(int16(t.last - t.prev))
+			d2 := int32(int16(t.prev - t.prev2))
+			pred := t.last + uint16(d)
+			f := [6]uint8{q(t.res), q(d), q(d2), uint8(a)}
+			v := pred + uint16(val(nUCA, f, -1))
+			bits := math.Float32bits(float32(int16(v)) * (45.0 / 8192.0))
+			off := r.off + 4*uint32(a)
+			if uint64(off)+4 <= uint64(len(out)) {
+				binary.LittleEndian.PutUint32(out[off:], bits)
+			}
+			t.res = int32(int16(v - pred))
+			t.prev2, t.prev, t.last = t.prev, t.last, v
+		}
+	}
+}
+
 func sndAll(out []byte, recs []SndRec, val valFn) {
 	for _, r := range recs {
 		for i := 0; i < 3; i++ {
@@ -261,6 +292,8 @@ func numCtx(L int, f [6]uint8) uint32 {
 		return uint32(f[0]) | uint32(f[1])<<4
 	case L == 59:
 		return uint32(f[0]) | cl(f[1], 15)<<8
+	case L == 66:
+		return cl(f[0], 23) | cl(f[1], 23)<<5 | cl(f[2], 15)<<10 | uint32(f[3])<<14
 	}
 	return cl(f[0], 63) | uint32(f[1])<<6
 }
@@ -290,6 +323,7 @@ func numericV2(out []byte, w *Walker, val valFn) {
 		}
 	}
 	stlAll(out, w.stls, val)
+	ucAll(out, w.ucs, val)
 	sndAll(out, w.snds, val)
 	teAll(out, w.tes, val)
 }

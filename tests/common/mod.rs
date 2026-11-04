@@ -142,6 +142,78 @@ pub fn synthetic(demoinfo: &[(u16, &str)], truncate: bool) -> Vec<u8> {
     d.0
 }
 
+/// One usercmd hidden-block body (mvdsv `SV_DebugClientCommand`, 23
+/// bytes): player, dropnum, msec, pitch/yaw/roll, moves, buttons, impulse.
+pub fn usercmd_block(
+    pl: u8,
+    drop: u8,
+    msec: u8,
+    a: [f32; 3],
+    mv: [i16; 3],
+    bi: [u8; 2],
+) -> Vec<u8> {
+    let mut b = vec![pl, drop, msec];
+    for x in a {
+        b.extend_from_slice(&x.to_le_bytes());
+    }
+    for m in mv {
+        b.extend_from_slice(&m.to_le_bytes());
+    }
+    b.extend_from_slice(&bi);
+    b
+}
+
+/// A demo with usercmd hidden blocks (type 1, 23 bytes) of four players:
+/// turning view angles on the 360/65536 grid, a few angles off it (-0.0,
+/// NaN, +180, 1.2345, an odd NaN payload), type-1 blocks of other lengths,
+/// two usercmds in one payload, after the base synthetic demo.
+pub fn usercmd_demo() -> Vec<u8> {
+    let mut d = Demo(synthetic(&[], false));
+    let mut rng = Rng(0xc0ffee);
+    let mut ang = [[0i32; 2]; 4];
+    let odd = [
+        -0.0f32,
+        f32::NAN,
+        180.0,
+        1.2345,
+        f32::from_bits(0x7fc0_1234),
+    ];
+    let grid = |s: i32| (s as i16 as f32) * (45.0 / 8192.0);
+    for i in 0..600u32 {
+        let pl = (i % 4) as u8;
+        let a = &mut ang[pl as usize];
+        a[0] = (a[0] + rng.below(9) as i32 - 4).clamp(-2900, 2900);
+        a[1] += 8 * (rng.below(7) as i32 - 3);
+        let mut angles = [grid(a[0]), grid(a[1]), 0.0];
+        if i % 53 == 7 {
+            angles[(i % 3) as usize] = odd[(i / 53) as usize % odd.len()];
+        }
+        let fwd = [0i16, 320, 400, -400][(i / 40 % 4) as usize];
+        let side = if i % 90 < 30 {
+            0
+        } else {
+            508 * (1 - 2 * ((i / 90) % 2) as i16)
+        };
+        let bi = [
+            (i / 25 % 4 == 0) as u8 | 2 * (i % 70 < 3) as u8,
+            if i % 111 == 5 { 7 } else { 0 },
+        ];
+        let msec = if i % 97 == 0 { 12 } else { 13 };
+        let b = usercmd_block(pl, (i % 150 == 149) as u8, msec, angles, [fwd, side, 0], bi);
+        if i % 61 == 30 {
+            let b2 = usercmd_block(pl ^ 1, 0, 13, angles, [0, 0, 0], [0, 0]);
+            d.hidden(0, &[(1, &b), (1, &b2)]);
+        } else {
+            d.hidden(if pl == 0 { 13 } else { 0 }, &[(1, &b)]);
+        }
+        if i % 150 == 75 {
+            d.hidden(0, &[(1, &b[..3]), (1, &[b.clone(), vec![9]].concat())]);
+        }
+    }
+    d.frame(5, 6, &s(8, &[&[3], &z("bye\n")]));
+    d.0
+}
+
 // ---------------------------------------------------------------- sample demos
 
 /// Optional test data, from the directory in `MVDZ_TEST_DATA`:

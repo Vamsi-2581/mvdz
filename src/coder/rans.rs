@@ -764,6 +764,7 @@ pub fn num_ctx(sid: usize, c: &NCtx) -> u32 {
         PE_OX..=56 => cl(f[0], 17) | cl(f[1], 17) << 5 | ((f[3] & 1) as u32) << 10,
         SND_O | TE_O => f[0] as u32 | (f[1] as u32) << 4,
         STL_VAL => f[0] as u32 | cl(f[1], 15) << 8,
+        UC_A => cl(f[0], 23) | cl(f[1], 23) << 5 | cl(f[2], 15) << 10 | (f[3] as u32) << 14,
         _ => cl(f[0], 63) | (f[1] as u32) << 6,
     }
 }
