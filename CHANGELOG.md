@@ -16,6 +16,17 @@
   type-1, 23-byte hidden block is now always coded so: an rc.3 file
   holding one in `hid.misc` no longer decodes.
 
+* **Faster normal-level compression** (encoder only, output
+  byte-identical), by vikpe
+  ([#29](https://github.com/galfthan/mvdz/pull/29)): the rANS encoder
+  builds its models with dense arrays instead of a hash lookup per
+  symbol. On set8 (BENCHMARKS.md), release download, interleaved with the
+  build before: one thread 5.95 to 8.1 MB/s (+36 %), 4 files in parallel
+  17.7 to 22.2 (+25 %), one file on 4 threads 10.9 to 11.7 (+7 %). On
+  the four usercmd demos, one thread, 6.8 to 9.3 MB/s. A streaming writer
+  with 1 MiB segments now costs about 0.15 s per MiB of demo at the
+  normal level (0.08 s at fast).
+
 ## 1.0.0-rc.3
 
 The normal level codes five structural contexts as the spec meant them

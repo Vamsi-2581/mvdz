@@ -240,8 +240,8 @@ int mvdz_attachments_export(mvdz_read_fn read, mvdz_seek_fn seek, void *user, mv
  *
  * Cost: mvdz_writer_write codes a segment on the calling thread, inside
  * the call that fills it, and decodes it once to check it. That takes
- * about 0.15-0.2 s per MiB of demo at the normal level and about 0.5 s
- * at the fast level (one core of the Skylake VM of BENCHMARKS.md), so
+ * about 0.15 s per MiB of demo at the normal level and about 0.08 s at
+ * the fast level (one core of the Skylake VM of BENCHMARKS.md), so
  * with 1 MiB segments one call in many blocks for that long and the
  * others only copy. Do not call it from a server's frame loop: hand the
  * demo bytes to a recording thread that owns the writer (calls on a
