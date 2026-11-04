@@ -87,18 +87,23 @@ A file holds the demo in one or more independently decodable segments.
   library and C calls): the smallest file. It cannot seek, and a reader
   gets no demo bytes until the whole demo has been decoded. Right for
   archives and downloads that are decompressed whole.
-* **`-s 1M`** (about 1 MiB of raw demo per segment): about 2 to 4 % larger
-  ([BENCHMARKS.md](BENCHMARKS.md)). A reader can seek by demo time to the
-  start of any segment, delivers the first bytes after one segment has
-  decoded, and can decode segments in parallel. Use it for files that
-  will be played, streamed or seeked into.
+* **`-s 1M`** (about 1 MiB of raw demo per segment): about 1 % larger at
+  the normal level, 2 % at the fast level ([BENCHMARKS.md](BENCHMARKS.md));
+  at the normal level the segments share one set of rANS models, stored
+  once in the file. A reader can seek by demo time to the start of any
+  segment, delivers the first bytes after one segment has decoded, and
+  can decode segments in parallel. Use it for files that will be played,
+  streamed or seeked into.
 
 The streaming writer (Rust `Writer`, C `mvdz_writer_*`), which records a
 demo as it grows, always cuts segments, because it writes each one as it
 fills: its default is 1 MiB. So the two defaults differ on purpose, each
 the best choice for its use: one-shot compression of a finished demo
 optimises size, a recording must cut. Pass a segment size explicitly to
-either to get the other behaviour.
+either to get the other behaviour. A recorded file keeps a model in every
+segment (it cannot know the whole demo's models before its first
+segment), so at the normal level it is about 3 to 5 % larger than
+`mvdz compress -s 1M` of the finished demo.
 
 ## Ratios and speeds
 
@@ -317,7 +322,8 @@ sticky, buffers are freed with `mvdz_free` (but the static strings of
 `mvdz_version` and `mvdz_strerror` never are), and callbacks must return
 normally (no `longjmp`) and must not call back into their own handle.
 `mvdz_writer_write` codes each segment on the calling thread when it
-fills, about 0.2 s per MiB at the normal level: a server should feed the
+fills, about 0.25 s per MiB at the normal level (0.08 s at the fast
+level): a server should feed the
 writer from a recording thread, not from its frame loop.
 Attachments are listed in the JSON of `mvdz_info_json`, read with
 `mvdz_attachment_read` (which needs both read and seek callbacks), and

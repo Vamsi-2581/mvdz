@@ -56,7 +56,7 @@ demos count for more).
 |---|---|---|
 | mvdz normal | 0.211 [0.206-0.216] | 0.328 [0.320-0.338] |
 | mvdz fast | 0.255 [0.250-0.261] | 0.397 [0.388-0.407] |
-| mvdz normal, `-s 1M` | 0.219 | |
+| mvdz normal, `-s 1M` | 0.213 | |
 | mvdz fast, `-s 1M` | 0.259 | |
 | archive gzip | 0.642 [0.635-0.648] | 1 |
 | gzip -9 | 0.614 | |
@@ -86,9 +86,29 @@ is 114,248 bytes at normal and 84,017 at fast. It is not a cold start on a
 small file: eight copies of the same demo in a row cost normal 2.2 bytes
 per float coordinate, as one copy does, while zstd codes the copies almost
 for free. On the real FTE float-coordinate vector (`float-fte`) normal is
-the smaller (0.411 against 0.450 of raw). Segmenting costs about +2 to +4 %
-at `-s 1M` (+3.8 % normal, +1.6 % fast; 64 KiB segments: about +29 % on
-sample40).
+the smaller (0.411 against 0.450 of raw). Segmenting costs about +1 to +2 %
+at `-s 1M` (+0.9 % normal, +1.6 % fast). At the normal level the segments
+of a one-shot file share one model per rANS stream, stored once (the
+TABLES section, FORMAT.md §2.6); with a model in every segment, as the
+streaming writer still writes them, `-s 1M` costs +3.8 % (0.219). On set8
+and three full-size 4on4 demos (12.8-14.2 MB raw each), at the normal level:
+
+| | set8, `-s 64K` | set8, `-s 1M` | 4on4s, `-s 64K` | 4on4s, `-s 1M` |
+|---|---:|---:|---:|---:|
+| a model in every segment | 0.2696 | 0.2191 | 0.2393 | 0.1921 |
+| shared models (TABLES) | 0.2345 | 0.2134 | 0.2051 | 0.1833 |
+| one segment | 0.2118 | 0.2118 | 0.1806 | 0.1806 |
+
+At `-s 1M`, one thread (`mvdz bench -j 1`, set8 and the three 4on4s,
+58.9 MB raw, median of 4 interleaved rounds): decoding 24.8 to 27.2 MB/s
+(each shared model is built once per file, not once per segment),
+compression 5.4 to 5.2 MB/s. The one-shot encoder holds every segment's
+symbols until the models are built: compressing a 14.2 MB 4on4 demo with
+one thread peaks at 156 MB at `-s 1M` (84 MB with a model in every
+segment) and 172 MB at `-s 64K` (95 MB); one segment, 133 MB.
+The streaming writer, one thread, 1 MiB segments, codes and checks a
+segment in about 0.25 s per MiB at the normal level and 0.08 s at the
+fast level (set8).
 
 **By era** (year of the demo; byte-weighted, archive-weighted, 95 %
 intervals; the 9 demos before 2007 are merged into the first group):
@@ -246,6 +266,8 @@ conformance decoder and fuzzing.
 | pure-Rust zstd decoder (as on wasm) | 40 | 2 | 80 | 0 |
 | rc.3 (contexts, zstd levels): holdout | 200 | normal, fast | 400 | 0 |
 | rc.3: stratified, compression self-check | 585 | normal, fast, both at `-s 1M` | 2,340 | 0 |
+| shared models: stratified, compression self-check, decoded by the library and the Go conformance decoder | 585 | normal `-s 1M` | 585 | 0 |
+| shared models: set8 and three 4on4 demos, decoded by the library and the Go conformance decoder | 11 | normal at `-s 64K` and `-s 1M` | 22 | 0 |
 
 No segment of a real demo fell back to raw storage in any campaign.
 
