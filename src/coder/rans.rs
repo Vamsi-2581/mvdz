@@ -20,7 +20,6 @@ use crate::error::{Error, Result};
 use crate::numeric::NCtx;
 use crate::streams::*;
 use crate::util::{Rd, put_uv};
-use std::collections::HashMap;
 
 pub const SCALE: u32 = 12;
 const T: u32 = 1 << SCALE;
@@ -159,7 +158,8 @@ fn cross_bits(c: &[u32], p: &[u32]) -> f64 {
 struct Model {
     alpha: usize,
     steps: u32,
-    ctx_of: HashMap<u32, usize>,
+    /// Own contexts, ascending: `own[i]` codes with `tables[i + 1]`.
+    own: Vec<u32>,
     map: Vec<u32>,
     tables: Vec<Table>,
 }
@@ -179,6 +179,9 @@ struct Counts {
 fn count_and_select(syms: &[(u32, u16)], alpha: usize) -> Counts {
     let per_sym = TABLE_BITS_PER_SYM.load(std::sync::atomic::Ordering::Relaxed) as f64;
     let maxc = syms.iter().map(|&(c, _)| c).max().unwrap_or(0) as usize;
+    // row_of, is_own and the model's map are dense arrays sized by the
+    // largest context; contexts are 16-bit by spec (§6.12).
+    assert!(maxc <= 0xffff, "context {maxc:#x} over 16 bits");
     let mut row_of = vec![u32::MAX; maxc + 1];
     let mut rows: Vec<u32> = Vec::new();
     let mut keys: Vec<u32> = Vec::new();
@@ -259,7 +262,6 @@ fn build_model(c: &Counts, steps: u32) -> Model {
         c.rest.iter().map(|&n| qlog(n, steps)).collect(),
         steps,
     )];
-    let mut ctx_of = HashMap::new();
     let maxk = c.own.last().map_or(0, |&k| k as usize + 1);
     let mut map = vec![0u32; maxk];
     for (i, &k) in c.own.iter().enumerate() {
@@ -270,13 +272,12 @@ fn build_model(c: &Counts, steps: u32) -> Model {
                 .collect(),
             steps,
         ));
-        ctx_of.insert(k, i + 1);
         map[k as usize] = (i + 1) as u32;
     }
     Model {
         alpha,
         steps,
-        ctx_of,
+        own: c.own.clone(),
         map,
         tables,
     }
@@ -315,13 +316,11 @@ fn write_model(m: &Model) -> (Vec<u8>, u64) {
     im.put(&mut e, NQC + 2, (m.tables.len() - 1) as u32);
     let fb = m.tables[0].q.clone();
     write_table(&mut e, &mut im, &fb, None);
-    let mut own: Vec<(u32, usize)> = m.ctx_of.iter().map(|(&k, &v)| (k, v)).collect();
-    own.sort();
     let mut prevk = 0u32;
-    for (i, (k, ti)) in own.into_iter().enumerate() {
+    for (i, &k) in m.own.iter().enumerate() {
         im.put(&mut e, NQC + 3, if i == 0 { k } else { k - prevk });
         prevk = k;
-        write_table(&mut e, &mut im, &m.tables[ti].q, Some(&fb));
+        write_table(&mut e, &mut im, &m.tables[i + 1].q, Some(&fb));
     }
     let n = e.decisions;
     (e.finish(), n)
