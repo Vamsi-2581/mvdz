@@ -4,6 +4,7 @@
 
 mod common;
 use common::*;
+use mvdz::format::K_TABLES;
 use mvdz::{Config, Level};
 use std::io::{Cursor, Read};
 
@@ -345,4 +346,36 @@ fn extension_metadata() {
         mvdz::compress(&src, &dup),
         Err(mvdz::Error::Invalid(_))
     ));
+}
+
+/// TABLES (FORMAT.md §2.6): one-shot segmented files at the normal level
+/// have it, right after META; whole, fast and streamed files do not.
+/// Every reader, attachment updates included, handles it.
+#[test]
+fn file_tables() {
+    let src = usercmd_demo();
+    let has = |c: &[u8]| sections(c).iter().any(|s| s.0 == K_TABLES);
+    let (seg, info) = mvdz::compress_info(&src, &cfg(Level::Normal, 8192)).unwrap();
+    assert!(info.segments > 2);
+    assert_eq!(sections(&seg)[1].0, K_TABLES, "TABLES right after META");
+    assert!(info.streams.iter().any(|s| s.be == 3), "back end 3 is used");
+    assert!(readers_agree(&seg, "tables").unwrap() == src);
+    for c in [
+        mvdz::compress(&src, &cfg(Level::Normal, 0)).unwrap(),
+        mvdz::compress(&src, &cfg(Level::Fast, 8192)).unwrap(),
+        stream(&src, &cfg(Level::Normal, 8192)),
+    ] {
+        assert!(!has(&c), "whole, fast and streamed files have no TABLES");
+    }
+    let a = mvdz::Attachment {
+        name: "notes.txt".into(),
+        mime: "text/plain".into(),
+        kv: vec![],
+        data: b"note ".repeat(100),
+    };
+    let with = mvdz::update_attachments_bytes(&seg, &[], &[a]).unwrap();
+    assert!(has(&with));
+    assert!(readers_agree(&with, "tables + attachment").unwrap() == src);
+    let without = mvdz::update_attachments_bytes(&with, &["notes.txt"], &[]).unwrap();
+    assert!(without == seg, "removing the attachment restores the file");
 }

@@ -28,6 +28,8 @@ pub const K_INDEX: u8 = 0x03;
 pub const K_ATTACH: u8 = 0x04;
 pub const K_ADIR: u8 = 0x05;
 pub const K_TRAILER: u8 = 0x7f;
+/// the file's shared rANS models (back end 3), before every segment
+pub const K_TABLES: u8 = 0x86;
 pub const CRITICAL: u8 = 0x80;
 
 /// prefix flag: written by the streaming encoder (metadata near the end)
@@ -49,6 +51,8 @@ pub const SEG_SLACK: u64 = 4096;
 /// Largest META raw payload, INDEX and ADIR section.
 pub const META_MAX: u64 = 1 << 24;
 pub const DIR_MAX: u64 = 1 << 24;
+/// Largest TABLES section body.
+pub const TABLES_MAX: u64 = 1 << 24;
 /// Encoder caps for metadata values (FORMAT.md, "Metadata").
 pub const META_VALUE_MAX: usize = 1 << 16;
 pub const ROSTER_VALUE_MAX: usize = 1 << 12;
@@ -885,6 +889,8 @@ pub struct Layout {
     /// offset of the first ATTACH or ADIR section
     pub attach_start: Option<u64>,
     pub trailer: Option<(u64, Trailer)>,
+    /// the TABLES section
+    pub tables: Option<crate::coder::rans::FileTables>,
     raw: u64,
     dinfo_next: u64,
     /// the budget charge for everything above (metadata, index, directory,
@@ -925,9 +931,15 @@ impl Layout {
             K_META if self.meta.is_some() => bad("duplicate META"),
             K_INDEX if self.index.is_some() => bad("duplicate INDEX"),
             K_ADIR if self.adir.is_some() => bad("duplicate ADIR"),
-            K_META | K_INDEX | K_SEGMENT if in_attach => bad("demo section after the attachments"),
+            K_TABLES if self.tables.is_some() => bad("duplicate TABLES"),
+            K_META | K_INDEX | K_SEGMENT | K_TABLES if in_attach => {
+                bad("demo section after the attachments")
+            }
             K_SEGMENT if self.index.is_some() => bad("segment after the index"),
-            K_META | K_INDEX | K_SEGMENT | K_TRAILER => Ok(()),
+            K_TABLES if !self.segs.is_empty() || self.index.is_some() => {
+                bad("TABLES after a segment or the index")
+            }
+            K_META | K_INDEX | K_SEGMENT | K_TABLES | K_TRAILER => Ok(()),
             K_ATTACH | K_ADIR => {
                 if self.attach_start.is_none() {
                     self.attach_start = Some(s.off);
@@ -950,6 +962,13 @@ impl Layout {
     pub fn meta(&mut self, s: &Sec, m: Metadata) -> Result<()> {
         self.hold(m.heap_size() + std::mem::size_of::<Metadata>() as u64)?;
         self.meta = Some((s.off, m));
+        Ok(())
+    }
+
+    /// A TABLES section (after [`Layout::section`]).
+    pub fn tables(&mut self, t: crate::coder::rans::FileTables) -> Result<()> {
+        self.hold(t.len())?;
+        self.tables = Some(t);
         Ok(())
     }
 

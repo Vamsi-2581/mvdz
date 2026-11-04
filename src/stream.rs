@@ -12,6 +12,7 @@
 //! callback), or with `io::Seek` by segment and demo time.
 
 use crate::budget::{Budget, Charge, ReadOptions, zeroed};
+use crate::coder::rans::FileTables;
 use crate::decode::{
     DemoCheck, SeekSrc, body_limit, decode_segment, decode_segment_share, read_full, scan_layout,
 };
@@ -180,6 +181,7 @@ impl<W: Write> StreamEncoder<W> {
                 doff,
                 self.cfg.threads.max(1),
                 &mut st,
+                &[],
             ) {
                 share = wk.dinfo();
                 body = Some(b);
@@ -189,7 +191,7 @@ impl<W: Write> StreamEncoder<W> {
         if let (Some(b), true) = (&body, self.cfg.verify) {
             let ok = parse_seg_hdr(b).ok().is_some_and(|h| {
                 let mut dst = vec![0u8; seg.len()];
-                decode_segment_share(share, b, &h, &mut dst, 1, &Budget::unlimited()).is_ok()
+                decode_segment_share(share, None, b, &h, &mut dst, 1, &Budget::unlimited()).is_ok()
                     && dst == seg
             });
             if !ok {
@@ -543,6 +545,10 @@ impl<S: Source> Reader<S> {
                 K_ADIR => {
                     let (b, _c) = self.read_body(&s)?;
                     self.lay.adir(&s, parse_adir(&b)?)?;
+                }
+                K_TABLES => {
+                    let (b, _c) = self.read_body(&s)?;
+                    self.lay.tables(FileTables::new(b, &self.budget)?)?;
                 }
                 K_SEGMENT => {
                     let (b, _c) = self.read_body(&s)?;
