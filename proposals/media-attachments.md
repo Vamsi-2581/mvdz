@@ -55,6 +55,9 @@ were absent.
 | `ref` | an attachment name of the same file | the attachment this one belongs to (a transcript names the voice or commentary track it transcribes). Writers refuse a new attachment whose `ref` names nothing; removing or not exporting the attachment it names leaves the `ref` dangling, which readers treat as absent |
 | `source` | string | provenance: where the attachment came from; for a voice or commentary track the URL of the original recording (e.g. a VOD link), so the speaker can be credited and linked |
 | `created` | RFC 3339 timestamp | when the attachment was made |
+| `href` | an `https` URL | the media is not stored in the file but fetched from this URL (§3, External media). The attachment's stored bytes are then empty; `mime` and the other keys describe the media behind the URL |
+| `href_sha256` | 64 lowercase hex digits | the SHA-256 of the bytes behind `href`; required for a fetchable file, so a player can verify what it downloaded |
+| `href_size` | decimal | the length of the bytes behind `href`; required with `href_sha256` |
 | `encryption` | `age` | the stored bytes are encrypted (§4); `mime` and every other key describe the plaintext. Absent: not encrypted. A reader that does not know the value treats the attachment as opaque bytes |
 
 `created` is `YYYY-MM-DDTHH:MM:SS[.frac]` and `Z` or `±HH:MM`.
@@ -141,6 +144,40 @@ it covers, each copy with its own `time_map` (or its own cut of the media);
 the same `source` ties them together. Tools can derive anchors by matching
 the demo's `svc_sound` events (their demo times are exact) against the
 recorded audio; this is a suggestion, not part of the format.
+
+**External media.** A track can be referenced instead of embedded: an
+attachment with empty stored bytes and an `href`. A track is strictly one
+or the other: an attachment with both stored bytes and `href` is
+malformed, and readers ignore its `href`. This keeps one authoritative
+copy per track.
+
+* **A fetchable file** (a voice track on the hub, an Opus file on any
+  web server) carries `href_sha256` and `href_size`. A player fetches the
+  file (a web player can stream it with HTTP range requests), checks the
+  size and the hash, and refuses a mismatch. It may be encrypted
+  (`encryption`), so the host holds only ciphertext.
+* **A stream link** (a YouTube or Twitch VOD) has no stable bytes to
+  hash, so it carries no `href_sha256`; it can be opened but not
+  verified, and is played through the platform's player, synced by the
+  timing keys. `source` keeps its meaning (where a track came from, for
+  credit); `href` is where its media is.
+
+Why: voice is often about 20 times the size of the demo, and commentary
+on a video platform cannot be embedded at all. A reference keeps the
+`.mvdz` small, fetches media only when it is played, and lets the host
+withdraw access later (which embedding cannot). The costs: URLs rot
+(an archive that must last should embed, or host the media itself),
+fetching tells the media host who is watching, a web player needs the
+host to allow cross-origin requests, and offline use needs the media
+downloaded first. The bundle hash (FORMAT.md §10) covers the reference,
+and through `href_sha256` the media it names.
+
+**Embedding a referenced track.** A tool that downloads the media of a
+fetchable reference (an archive, a mirror) may replace the reference with
+an embedded attachment through an ordinary attachment update: same name
+and keys, the downloaded bytes stored, and `href`, `href_sha256` and
+`href_size` removed. The stored bytes then have the SHA-256 the reference
+named.
 
 **Transcripts.** WebVTT (`text/vtt`), `role=transcript`, `ref` = the name
 of the voice or commentary attachment it transcribes, `lang`; cue times are
@@ -232,7 +269,9 @@ combined with the name filters so that every given condition must hold.
 The draft writer refused malformed values of these keys: decimals as
 defined in §2, `slot` 0-255, `encryption` a known value whose bytes are
 stored with codec 0 and (for `age`) start with the age header line
-`age-encryption.org/v1`, `lang`
+`age-encryption.org/v1`, `href` an `https` URL on an attachment whose
+stored bytes are empty (and `href_sha256` and `href_size` both present
+or both absent), `lang`
 as subtags of 1-8 ASCII letters or digits joined by `-` (at most 35
 bytes), `created` as `YYYY-MM-DDTHH:MM:SS[.frac]` with `Z` or `±HH:MM`,
 `time_map` as in §3, and a new attachment whose `ref` names no attachment
@@ -265,6 +304,9 @@ key were absent.
 10. age does not reveal who a file is encrypted to. Does a viewer need a
     hint of which key opens a track (a free-text `key_hint`, e.g. "team
     blue password"), and is a hint itself a leak?
+11. External media: is `https` the only scheme worth allowing? Should a
+    file be allowed to list several URLs for the same bytes (mirrors), all
+    verified by the same `href_sha256`?
 
 **Feedback**: open an issue on GitHub
 (<https://github.com/galfthan/mvdz/issues>).
