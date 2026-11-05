@@ -106,20 +106,18 @@ full-size 4on4 demos (12.8-14.2 MB raw each), at the normal level:
 | | set8, `-s 64K` | set8, `-s 256K` | set8, `-s 1M` | 4on4s, `-s 64K` | 4on4s, `-s 256K` | 4on4s, `-s 1M` |
 |---|---:|---:|---:|---:|---:|---:|
 | a model in every segment | 0.2696 | 0.2351 | 0.2191 | 0.2393 | 0.2076 | 0.1921 |
-| shared models (TABLES) | 0.2345 | 0.2186 | 0.2134 | 0.2051 | 0.1888 | 0.1833 |
+| shared models (TABLES) | 0.2345 | 0.2187 | 0.2134 | 0.2054 | 0.1888 | 0.1833 |
 | one segment | 0.2118 | 0.2118 | 0.2118 | 0.1806 | 0.1806 | 0.1806 |
 
 At `-s 256K`, one thread (`mvdz bench --levels normal -s 256K -j 1` on
-set8, median of 5 idle-gated interleaved rounds, release builds with and
-without shared models): compression 6.1 [5.8-6.4] to 8.2 [7.7-8.2] MB/s
-(the segments code with the file's models instead of building their
-own), decoding 22.8 [21.0-24.1] to 25.3 [24.0-25.5] MB/s (each shared
-model is built once per file, not once per segment). The models are
-trained from per-context counts summed over the segments, and each
-segment's numeric symbols are kept between training and coding (3 bytes
-a value): compressing a 14.2 MB 4on4 demo with one thread peaks at
-109 MB at `-s 256K` and 105 MB at `-s 1M` (87 MB for both with a model
-in every segment); one segment, 133 MB.
+set8, median of 5 idle-gated rounds, release builds with and without
+shared models): compression 6.1 [5.8-6.4] to 8.0 [7.7-8.1] MB/s (the
+segments code with the file's models instead of building their own),
+decoding 22.8 [21.0-24.1] to 25.5 [24.6-26.1] MB/s (each shared model is
+built once per file, not once per segment). The models are trained from
+per-context counts summed over the segments: compressing a 14.2 MB 4on4
+demo with one thread peaks at 96 MB at `-s 256K` and 94 MB at `-s 1M`
+(87 MB for both with a model in every segment); one segment, 133 MB.
 
 **By era** (year of the demo; byte-weighted, archive-weighted, 95 %
 intervals; the 9 demos before 2007 are merged into the first group):

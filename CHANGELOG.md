@@ -16,10 +16,10 @@
   they open a file; the models are built once, under the reader's
   budget, when the first segment that uses them is decoded, so metadata
   and attachment tools never build them. At `-s 256K`, one thread, on
-  set8: compression 6.1 to 8.2 MB/s (no model is built per segment),
-  decoding 22.8 to 25.3 MB/s. The models are trained from per-context
+  set8: compression 6.1 to 8.0 MB/s (no model is built per segment),
+  decoding 22.8 to 25.5 MB/s. The models are trained from per-context
   counts summed over the segments; compressing a 14.2 MB 4on4 demo with
-  one thread peaks at 109 MB at `-s 256K` and 105 MB at `-s 1M` (87 MB
+  one thread peaks at 96 MB at `-s 256K` and 94 MB at `-s 1M` (87 MB
   without shared models, 133 MB for one segment). Attachment updates now
   read the file under the default limits.
 
