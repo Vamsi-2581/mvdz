@@ -860,7 +860,7 @@ pub(crate) type Models = Vec<Option<Arc<DModel>>>;
 /// them.
 pub struct FileTables {
     body: Vec<u8>,
-    models: OnceLock<Models>,
+    models: OnceLock<Result<Models>>,
 }
 
 impl FileTables {
@@ -877,16 +877,18 @@ impl FileTables {
         self.body.len() as u64
     }
 
-    /// The models, built once (charged to `budget`). A failed build is
-    /// not kept: a later call (e.g. under a larger budget) tries again.
-    /// Threads that ask at the same time may each build them; one set is
-    /// kept.
+    /// The models, built once by one thread (charged to `budget`; other
+    /// threads wait), so a decode near a memory limit passes or fails the
+    /// same way every time. The result is kept, an error too: a reader
+    /// whose model build failed must be reopened to try again.
     pub(crate) fn models(&self, budget: &Budget) -> Result<&Models> {
-        if let Some(m) = self.models.get() {
-            return Ok(m);
+        match self
+            .models
+            .get_or_init(|| read_tables(&self.body, true, budget))
+        {
+            Ok(m) => Ok(m),
+            Err(e) => Err(*e),
         }
-        let m = read_tables(&self.body, true, budget)?;
-        Ok(self.models.get_or_init(|| m))
     }
 }
 
