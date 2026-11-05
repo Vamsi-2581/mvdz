@@ -2055,12 +2055,11 @@ of rule 10).
 11. **Shared models** (`segment.rs:train`): in a one-shot file of more
     than one segment at the normal level, each structural and numeric
     stream gets one model, built as in rule 6 from its counts summed over
-    all segments. Of `steps` 2 and 4 it keeps the one with the smaller
-    estimate, header bits plus the sum over symbols of 12 - log2(freq)
-    (2 on a tie); a stream with neither model allowed (M2) has none. While
-    the models would make TABLES larger than 2^24 bytes, the one with the
-    largest header is dropped. TABLES, after META, holds the model of
-    every stream that some segment codes with back end 3.
+    all segments, with `steps` 2; a stream whose model breaks M2 has none
+    (it keeps a model in each segment, back end 2). While the models
+    would make TABLES larger than 2^24 bytes, the one with the largest
+    header is dropped. TABLES, after META, holds the model of every
+    stream that some segment codes with back end 3.
 
 ---------------------------------------------------------------------------
 

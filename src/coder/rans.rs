@@ -230,22 +230,11 @@ impl Tally {
     }
 
     /// The shared model of these counts (a stream's in every segment of a
-    /// file): the quantisation with the smaller estimated coded size, or
-    /// None if neither model is allowed (rule M2).
+    /// file), with `steps` 2, or None if it is not allowed (rule M2).
     pub fn shared(&self) -> Option<Shared> {
-        let c = select(self);
-        let mut best: Option<(f64, Shared)> = None;
-        for steps in [2u32, 4] {
-            let model = build_model(&c, steps);
-            let Some(hdr) = header(&model) else {
-                continue;
-            };
-            let bits = 8.0 * hdr.len() as f64 + coded_bits(&model, &c);
-            if best.as_ref().is_none_or(|b| bits < b.0) {
-                best = Some((bits, Shared { model, hdr }));
-            }
-        }
-        best.map(|b| b.1)
+        let model = build_model(&select(self), 2);
+        let hdr = header(&model)?;
+        Some(Shared { model, hdr })
     }
 }
 
@@ -341,23 +330,6 @@ fn build_model(c: &Counts, steps: u32) -> Model {
         map,
         tables,
     }
-}
-
-/// The bits the rANS body of the counted symbols takes with `m`, the
-/// model built from `c` (without the coder's flush).
-fn coded_bits(m: &Model, c: &Counts) -> f64 {
-    let bits = |t: &Table, n: &[u32]| -> f64 {
-        n.iter()
-            .zip(&t.freq)
-            .filter(|&(&n, _)| n > 0)
-            .map(|(&n, &f)| n as f64 * (SCALE as f64 - (f as f64).log2()))
-            .sum()
-    };
-    let a = c.alpha;
-    bits(&m.tables[0], &c.rest)
-        + (0..c.own.len())
-            .map(|i| bits(&m.tables[i + 1], &c.own_counts[i * a..(i + 1) * a]))
-            .sum::<f64>()
 }
 
 // --------------------------------------------------------------- model I/O
@@ -1138,7 +1110,7 @@ impl<'a> BitR<'a> {
 }
 
 /// The (context, bucket) pairs of a numeric stream and its mantissa bits.
-fn num_syms(sid: usize, vals: &[(NCtx, i32)]) -> (Vec<(u32, u16)>, Vec<u8>) {
+pub fn num_syms(sid: usize, vals: &[(NCtx, i32)]) -> (Vec<(u32, u16)>, Vec<u8>) {
     let mut syms = Vec::with_capacity(vals.len());
     let mut bw = BitW::default();
     for (c, v) in vals {
@@ -1149,50 +1121,13 @@ fn num_syms(sid: usize, vals: &[(NCtx, i32)]) -> (Vec<(u32, u16)>, Vec<u8>) {
     (syms, bw.finish())
 }
 
-pub fn encode_num(sid: usize, vals: &[(NCtx, i32)]) -> Option<Vec<u8>> {
+/// A numeric stream with its own model, or with the file's model `file`
+/// (back end 3).
+pub fn encode_num(sid: usize, vals: &[(NCtx, i32)], file: Option<&Shared>) -> Option<Vec<u8>> {
     let (syms, extra) = num_syms(sid, vals);
-    best_pack(&syms, NALPHA, &extra)
-}
-
-/// A numeric stream's symbols, kept between training a file's models and
-/// coding its segments: contexts (16-bit), buckets and mantissa bits, 3
-/// bytes a value and its bits instead of the 12 of its (NCtx, i32).
-pub struct NumSyms {
-    ctxs: Vec<u16>,
-    buckets: Vec<u8>,
-    bits: Vec<u8>,
-}
-
-impl NumSyms {
-    pub fn new(sid: usize, vals: &[(NCtx, i32)]) -> NumSyms {
-        let (v, bits) = num_syms(sid, vals);
-        NumSyms {
-            // contexts are 16-bit by spec (§6.12), as `Tally::add` asserts
-            ctxs: v
-                .iter()
-                .map(|&(c, _)| u16::try_from(c).expect("context over 16 bits"))
-                .collect(),
-            buckets: v.iter().map(|&(_, b)| b as u8).collect(),
-            bits,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.ctxs.len()
-    }
-
-    /// The (context, bucket) pairs.
-    pub fn pairs(&self) -> Vec<(u32, u16)> {
-        self.ctxs
-            .iter()
-            .zip(&self.buckets)
-            .map(|(&c, &b)| (c as u32, b as u16))
-            .collect()
-    }
-
-    /// The stream coded with the file's model (back end 3).
-    pub fn encode(&self, file: &Shared) -> Vec<u8> {
-        pack_body(&file.model, &self.pairs(), &self.bits)
+    match file {
+        Some(sh) => Some(pack_body(&sh.model, &syms, &extra)),
+        None => best_pack(&syms, NALPHA, &extra),
     }
 }
 
@@ -1300,7 +1235,7 @@ mod tests {
                 )
             })
             .collect();
-        let b = encode_num(PI_OX, &vals).unwrap();
+        let b = encode_num(PI_OX, &vals, None).unwrap();
         let budget = Budget::unlimited();
         let mut d = NumDec::new(PI_OX, &b, vals.len(), None, &budget).unwrap();
         for &(c, v) in &vals {

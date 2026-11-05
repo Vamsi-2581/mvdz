@@ -378,7 +378,7 @@ fn pack_one(
     let z = level.zstd();
     match kind {
         Kind::Lazy => coder::encode_lazy(be, &wk.io.syms[sid], &wk.io.ctxs[sid], z, file),
-        Kind::Num => coder::encode_num(be, sid, num, z),
+        Kind::Num => coder::encode_num(be, sid, num, z, file),
         Kind::Blob => coder::encode_blob(be, &wk.io.blobs[sid], z),
     }
 }
@@ -434,84 +434,37 @@ fn numerics(src: &[u8], wk: &Walked, threads: usize) -> Vec<Vec<Vec<(NCtx, i32)>
     })
 }
 
-/// A walked segment's numeric symbols per group (in [`groups`] order) and
-/// stream of the group, kept from training to coding.
-pub type SegNums = Vec<Vec<rans::NumSyms>>;
-
-/// The shared models of a file and its segments' numeric symbols.
-pub struct Trained {
-    /// by stream id
-    pub models: Vec<Option<rans::Shared>>,
-    /// by segment, None for a segment that was not walked
-    pub nums: Vec<Option<SegNums>>,
-}
-
 /// The shared models of a file (FORMAT.md §12 rule 11): one per
-/// structural and numeric stream, from its symbols in every walked segment
-/// `(bytes, walk)`. Each segment's numeric values are extracted once, here:
-/// their symbols are kept for coding ([`encode`]), and the models are
-/// built from per-context counts summed over the segments, so no stream's
-/// symbols of the whole file are held at once.
-pub fn train(segs: &[Option<(&[u8], &Walked)>], threads: usize) -> Trained {
-    let groups = groups();
-    let nums: Vec<Option<SegNums>> = par_map(threads, segs.len(), |i| {
-        let (s, wk) = segs[i]?;
-        let vals = numerics(s, wk, 1);
-        Some(
-            groups
-                .iter()
-                .zip(vals)
-                .map(|(g, v)| {
-                    g.streams()
-                        .iter()
-                        .zip(v)
-                        .map(|(&sid, x)| rans::NumSyms::new(sid, &x))
-                        .collect()
-                })
-                .collect(),
-        )
-    });
-    let walked = || {
-        segs.iter()
-            .zip(&nums)
-            .filter_map(|(s, n)| Some((s.as_ref()?.1, n.as_ref()?)))
+/// structural and numeric stream, from its per-context counts summed over
+/// every walked segment `(bytes, walk)`, one segment at a time.
+pub fn train(segs: &[(&[u8], &Walked)], threads: usize) -> Vec<Option<rans::Shared>> {
+    let mut tally: Vec<Option<rans::Tally>> = (0..N_STREAMS).map(|_| None).collect();
+    let mut add = |sid: usize, alpha: usize, v: &[(u32, u16)]| {
+        if !v.is_empty() {
+            tally[sid]
+                .get_or_insert_with(|| rans::Tally::new(alpha))
+                .add(v);
+        }
     };
-    // every structural and numeric stream (a numeric one by its place in
-    // SegNums) with its symbol count; biggest first for load balance
-    let mut jobs: Vec<(usize, Option<(usize, usize)>, usize)> = (0..N_LAZY)
-        .map(|sid| (sid, None))
-        .chain(groups.iter().enumerate().flat_map(|(gi, g)| {
-            (0..g.streams().len()).map(move |k| (g.streams()[k], Some((gi, k))))
-        }))
-        .map(|(sid, at)| {
-            let n = walked()
-                .map(|(wk, n)| match at {
-                    None => wk.io.syms[sid].len(),
-                    Some((gi, k)) => n[gi][k].len(),
-                })
-                .sum();
-            (sid, at, n)
-        })
-        .filter(|j| j.2 > 0)
-        .collect();
-    jobs.sort_by_key(|j| (std::cmp::Reverse(j.2), j.0));
-    let built = par_map(threads, jobs.len(), |j| {
-        let (sid, at, _) = jobs[j];
-        let mut t = rans::Tally::new(if at.is_none() { 256 } else { rans::NALPHA });
-        for (wk, n) in walked() {
-            match at {
-                None => t.add(&rans::byte_syms(&wk.io.syms[sid], &wk.io.ctxs[sid])),
-                Some((gi, k)) => t.add(&n[gi][k].pairs()),
+    for &(s, wk) in segs {
+        for sid in 0..N_LAZY {
+            add(
+                sid,
+                256,
+                &rans::byte_syms(&wk.io.syms[sid], &wk.io.ctxs[sid]),
+            );
+        }
+        for (g, vals) in groups().iter().zip(numerics(s, wk, threads)) {
+            for (&sid, x) in g.streams().iter().zip(vals) {
+                add(sid, rans::NALPHA, &rans::num_syms(sid, &x).0);
             }
         }
-        t.shared()
-    });
-    let mut models: Vec<Option<rans::Shared>> = (0..N_STREAMS).map(|_| None).collect();
-    for (j, m) in jobs.iter().zip(built) {
-        models[j.0] = m;
     }
+    let mut models: Vec<Option<rans::Shared>> = par_map(threads, N_STREAMS, |sid| {
+        tally[sid].as_ref().and_then(|t| t.shared())
+    });
     fit_tables(&mut models, TABLES_MAX);
-    Trained { models, nums }
+    models
 }
 
 /// The TABLES body (FORMAT.md §2.6) of the models of streams `ids`
@@ -546,9 +499,8 @@ fn fit_tables(models: &mut [Option<rans::Shared>], max: u64) {
 }
 
 /// The transform body of a walked segment; `dinfo_off` is the offset of its
-/// demoinfo share in the metadata store. With `file`, the file's shared
-/// models (by stream id) and the segment's numeric symbols from training,
-/// a stream with a shared model uses it.
+/// demoinfo share in the metadata store. A stream with a model in `shared`
+/// (by stream id; empty: none) uses it.
 pub fn encode(
     src: &[u8],
     wk: &Walked,
@@ -556,30 +508,10 @@ pub fn encode(
     dinfo_off: u64,
     threads: usize,
     stats: &mut Vec<StreamStat>,
-    file: Option<(&[Option<rans::Shared>], &SegNums)>,
+    shared: &[Option<rans::Shared>],
 ) -> Vec<u8> {
     let groups = groups();
-    let model = |sid: usize| file.and_then(|f| f.0.get(sid)?.as_ref());
-    let kept = file.map(|f| f.1);
-    // the values are extracted again only for a numeric stream without a
-    // shared model (none, unless the TABLES limit dropped one)
-    let need_vals = kept.is_none_or(|n| {
-        groups.iter().zip(n).any(|(g, v)| {
-            g.streams()
-                .iter()
-                .zip(v)
-                .any(|(&sid, x)| x.len() > 0 && model(sid).is_none())
-        })
-    });
-    let nums = if need_vals {
-        numerics(src, wk, threads)
-    } else {
-        Vec::new()
-    };
-    let num_len = |gi: usize, k: usize| match kept {
-        Some(n) => n[gi][k].len(),
-        None => nums[gi][k].len(),
-    };
+    let nums = numerics(src, wk, threads);
     // every non-empty stream is a job: (sid, kind, group, index in group)
     let mut jobs: Vec<(usize, Kind, usize, usize)> = Vec::new();
     for sid in 0..N_LAZY {
@@ -589,7 +521,7 @@ pub fn encode(
     }
     for (gi, g) in groups.iter().enumerate() {
         for (k, &sid) in g.streams().iter().enumerate() {
-            if num_len(gi, k) > 0 {
+            if !nums[gi][k].is_empty() {
                 jobs.push((sid, Kind::Num, gi, k));
             }
         }
@@ -601,7 +533,7 @@ pub fn encode(
     }
     let size = |j: &(usize, Kind, usize, usize)| match j.1 {
         Kind::Lazy => wk.io.syms[j.0].len(),
-        Kind::Num => num_len(j.2, j.3) * 2,
+        Kind::Num => nums[j.2][j.3].len() * 2,
         Kind::Blob => wk.io.blobs[j.0].len(),
     };
     // biggest first for load balance; output in stream id order
@@ -609,15 +541,13 @@ pub fn encode(
     order.sort_by_key(|&i| std::cmp::Reverse(size(&jobs[i])));
     let packed_sorted = par_map(threads, jobs.len(), |k| {
         let (sid, kind, gi, i) = jobs[order[k]];
-        if let (Kind::Num, Some(m), Some(n)) = (kind, model(sid), kept) {
-            return (BE_FILE, n[gi][i].encode(m));
-        }
         let num: &[(NCtx, i32)] = if matches!(kind, Kind::Num) {
             &nums[gi][i]
         } else {
             &[]
         };
-        pack_best(kind, sid, level, wk, num, model(sid))
+        let file = shared.get(sid).and_then(|m| m.as_ref());
+        pack_best(kind, sid, level, wk, num, file)
     });
     let mut packed: Vec<Option<(u8, Vec<u8>)>> = (0..jobs.len()).map(|_| None).collect();
     for (k, p) in packed_sorted.into_iter().enumerate() {
@@ -627,7 +557,7 @@ pub fn encode(
     ids.sort_by_key(|&i| jobs[i].0);
     let count = |i: usize| match jobs[i].1 {
         Kind::Lazy => wk.io.syms[jobs[i].0].len(),
-        Kind::Num => num_len(jobs[i].2, jobs[i].3),
+        Kind::Num => nums[jobs[i].2][jobs[i].3].len(),
         Kind::Blob => wk.io.blobs[jobs[i].0].len(),
     };
     // the flag only when the segment has demoinfo blocks: without any,
@@ -1019,7 +949,7 @@ mod tests {
             for threads in [1, 3] {
                 let (wk, _) = walk(&src, Proto::default(), true).unwrap();
                 let mut st = Vec::new();
-                let body = encode(&src, &wk, level, 0, 1, &mut st, None);
+                let body = encode(&src, &wk, level, 0, 1, &mut st, &[]);
                 let h = parse_header(&body, src.len()).unwrap();
                 let dst = decoded(&body, &h, src.len(), None, threads);
                 assert!(dst == src, "{level:?} {threads}");
@@ -1073,7 +1003,7 @@ mod tests {
         for &level in levels {
             for threads in [1, 3] {
                 let (wk, _) = walk(&src, Proto::default(), true).unwrap();
-                let body = encode(&src, &wk, level, 0, 1, &mut Vec::new(), None);
+                let body = encode(&src, &wk, level, 0, 1, &mut Vec::new(), &[]);
                 let h = parse_header(&body, src.len()).unwrap();
                 let uc = h.ents.iter().find(|e| e.0 == UC).unwrap().2;
                 assert!(uc >= (300 + 9) * UC_MIN_SYMS, "{uc}");
@@ -1084,32 +1014,31 @@ mod tests {
         // without usercmd blocks neither stream is in the table
         let plain = demo();
         let (wk, _) = walk(&plain, Proto::default(), true).unwrap();
-        let body = encode(&plain, &wk, Level::Normal, 0, 1, &mut Vec::new(), None);
+        let body = encode(&plain, &wk, Level::Normal, 0, 1, &mut Vec::new(), &[]);
         let h = parse_header(&body, plain.len()).unwrap();
         assert!(h.ents.iter().all(|e| e.0 != UC && e.0 != UC_A));
     }
 
     /// Models a TABLES section over its limit would hold are dropped,
-    /// largest header first; their streams then code with back end 2, from
-    /// values extracted again, and the segment still decodes.
+    /// largest header first; their streams then code with back end 2, and
+    /// the segment still decodes.
     #[test]
     fn tables_limit() {
         let src = demo();
         let (wk, _) = walk(&src, Proto::default(), true).unwrap();
-        let segs = [Some((&src[..], &wk)), Some((&src[..], &wk))];
-        let mut tr = train(&segs, 1);
+        let mut models = train(&[(&src[..], &wk), (&src[..], &wk)], 1);
         let ids = |m: &[Option<rans::Shared>]| -> Vec<usize> {
             (0..m.len()).filter(|&i| m[i].is_some()).collect()
         };
-        let all = ids(&tr.models);
+        let all = ids(&models);
         assert!(all.iter().any(|&sid| is_num(sid)) && all.iter().any(|&sid| is_lazy(sid)));
-        let len = tables_body(&tr.models, &all).len() as u64;
-        let hdr = |sid: usize| tr.models[sid].as_ref().unwrap().hdr.len();
+        let len = tables_body(&models, &all).len() as u64;
+        let hdr = |sid: usize| models[sid].as_ref().unwrap().hdr.len();
         let big = *all.iter().max_by_key(|&&sid| (hdr(sid), sid)).unwrap();
-        fit_tables(&mut tr.models, len);
-        assert_eq!(ids(&tr.models), all);
-        fit_tables(&mut tr.models, len - 1);
-        let kept = ids(&tr.models);
+        fit_tables(&mut models, len);
+        assert_eq!(ids(&models), all);
+        fit_tables(&mut models, len - 1);
+        let kept = ids(&models);
         assert_eq!(
             kept,
             all.iter()
@@ -1117,29 +1046,16 @@ mod tests {
                 .filter(|&s| s != big)
                 .collect::<Vec<_>>()
         );
-        // a numeric stream without its model too
-        let num = *kept.iter().rev().find(|&&sid| is_num(sid)).unwrap();
-        tr.models[num] = None;
-        let kept = ids(&tr.models);
-        let ft = FileTables::new(tables_body(&tr.models, &kept), &Budget::unlimited()).unwrap();
+        let ft = FileTables::new(tables_body(&models, &kept), &Budget::unlimited()).unwrap();
         let mut st = Vec::new();
-        let nums = tr.nums[0].as_ref().unwrap();
-        let body = encode(
-            &src,
-            &wk,
-            Level::Normal,
-            0,
-            1,
-            &mut st,
-            Some((&tr.models, nums)),
-        );
+        let body = encode(&src, &wk, Level::Normal, 0, 1, &mut st, &models);
         let be = |sid: usize| st.iter().find(|s| s.id == sid).unwrap().be;
-        assert_eq!((be(big), be(num)), (BE_RANS, BE_RANS));
+        assert_eq!(be(big), BE_RANS);
         assert!(kept.iter().all(|&sid| be(sid) == BE_FILE));
         let h = parse_header(&body, src.len()).unwrap();
         assert!(decoded(&body, &h, src.len(), Some(&ft), 1) == src);
         // nothing fits: no model is kept
-        fit_tables(&mut tr.models, 0);
-        assert!(ids(&tr.models).is_empty());
+        fit_tables(&mut models, 0);
+        assert!(ids(&models).is_empty());
     }
 }
