@@ -2022,8 +2022,9 @@ of rule 10).
    rule 11, else 2); if the model breaks M1 or M2, the smaller of store
    and zstd. Blobs, and every stream at the fast level: the smaller of
    store and zstd (store on a tie). Streams are written in id order,
-   empty streams omitted. rans tries `steps` 2 and 4 and keeps the smaller
-   (2 on a tie).
+   empty streams omitted. A model in the segment (back end 2) tries
+   `steps` 2 and 4 and keeps the smaller (2 on a tie); shared models use
+   `steps` 2 (rule 11).
 5. **Segment coding**: transform, unless the walk cannot represent the
    segment, its section would break the ratio limit, or decoding it does
    not give the input (one-shot: the whole file is decoded and compared;
