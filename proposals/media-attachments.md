@@ -24,7 +24,8 @@ writes them with its own prefix (e.g. `x-role`).
   against about 1.4 MB for the compressed demo (voice is often about 20
   times the demo). Version 1's export (by name and name prefix) already
   lets a download leave them out.
-* They are personal data: voice in particular needs a privacy default.
+* They are personal data: voice in particular has to be protected, not
+  just labelled, because a file is copied freely once it is shared (§4).
 
 ## 2. Keys
 
@@ -54,7 +55,7 @@ were absent.
 | `ref` | an attachment name of the same file | the attachment this one belongs to (a transcript names the voice or commentary track it transcribes). Writers refuse a new attachment whose `ref` names nothing; removing or not exporting the attachment it names leaves the `ref` dangling, which readers treat as absent |
 | `source` | string | provenance: where the attachment came from; for a voice or commentary track the URL of the original recording (e.g. a VOD link), so the speaker can be credited and linked |
 | `created` | RFC 3339 timestamp | when the attachment was made |
-| `visibility` | `public`, `team` or `private` | who may see it (§3). **Advisory**: mvdz has no encryption or access control, and anyone holding the file can list and extract every attachment. The label takes effect only where a server holds the full file and serves filtered copies (FORMAT.md §10, Exporting). Typical uses: an embargo (the uploader sets `public` later with an ordinary update) and a statement of the uploader's intent for tools and mirrors |
+| `encryption` | `age` | the stored bytes are encrypted (§4); `mime` and every other key describe the plaintext. Absent: not encrypted. A reader that does not know the value treats the attachment as opaque bytes |
 
 `created` is `YYYY-MM-DDTHH:MM:SS[.frac]` and `Z` or `±HH:MM`.
 
@@ -88,8 +89,8 @@ and `slot` (and `team`) for a recording of one player; a recording of a
 team channel (several players mixed) carries `team` only, without
 `player` and `slot`. A file may hold one track per player, one per team
 channel, or both; players should not mix a player's own track with a team
-channel that contains it. `visibility` defaults to `private` (absent means
-private) for voice. Voice can be far larger than the demo: about 29 MB of
+channel that contains it. Voice should be encrypted (§4) unless everyone
+heard on it agreed to publish it. Voice can be far larger than the demo: about 29 MB of
 Opus for 8 players over 20 minutes, against about 1.4 MB for the
 compressed demo; tools that only need the demo should read the demo part
 and skip the attachments (FORMAT.md §10: readers never load attachments to skip them).
@@ -98,8 +99,8 @@ and skip the attachments (FORMAT.md §10: readers never load attachments to skip
 `player`, `slot` and `team` are absent; `speaker` names the caster and
 `lang` the language. Several commentary tracks per demo are allowed (e.g.
 pulled from several Twitch or YouTube VODs); they are told apart by
-`speaker` and `lang`. `source` holds the VOD URL. `visibility` defaults to
-`public` for commentary.
+`speaker` and `lang`. `source` holds the VOD URL. Commentary is normally
+not encrypted: it was broadcast.
 
 **Timing of a track.** Three ways, in this order of precedence:
 
@@ -145,20 +146,14 @@ recorded audio; this is a suggestion, not part of the format.
 of the voice or commentary attachment it transcribes, `lang`; cue times are
 on the media clock of that track and map to demo time through that track's
 timing keys (the transcript may repeat them).
-Speaker tags (`<v name>`) as in WebVTT. `visibility` defaults to that of
-the track it transcribes.
+Speaker tags (`<v name>`) as in WebVTT. A transcript of an encrypted
+track should be encrypted to the same recipients.
 
-**Privacy.** Tools that redistribute files (downloads, exports, mirrors)
-must drop every attachment that is not `public`. When `visibility` is
-absent (or malformed), only these are public: `role=commentary` (it was
-broadcast); `analysis`, `screenshot` or `sidecar` whose MIME type is not
-`audio/*` (compared without case); a `transcript` whose `ref` names an
-attachment of the same file that is public by these rules (a chain of
-refs is followed at most 8 deep). Everything else is private: voice, any
-audio without a public role, an absent or unknown `role`, a transcript of
-a private or missing track. The draft implemented this rule as `is_public` (§4). `team` means visible to the players
-of that team in this demo (the `team` key, else the team of the player in
-`slot`); a tool that does not know who is asking treats it as private.
+**Privacy.** An attachment without `encryption` is public: anyone holding
+the file can read it. An encrypted one is safe to copy, mirror and
+download with the file. Tools that redistribute files therefore need no
+filtering rule for privacy; export by name or prefix (FORMAT.md §10)
+remains for leaving large tracks out of a download.
 
 **Known attachment types** (non-normative):
 
@@ -172,27 +167,72 @@ of that team in this demo (the `team` key, else the team of the player in
 Producers of other data use their own vendor MIME types and schemas.
 
 
-## 4. Visibility is advisory
+## 4. Encryption
 
-mvdz has no encryption or access control: anyone holding a file can list
-and extract every attachment in it, whatever its `visibility`. The label
-only takes effect where a server holds the full file and serves filtered
-copies (FORMAT.md §10, Exporting); anything inside a file that is
-distributed must be treated as public. Typical uses: an **embargo** (the
-uploader stores the track `private` and switches it to `public` later
-with an ordinary attachment update), and a statement of the uploader's
-intent for tools and mirrors.
+Private media is protected by encrypting it, not by a label. A label
+(the 1.0 drafts had `visibility`: `public`, `team` or `private`) only
+takes effect where a server holds the file and serves filtered copies;
+once the file is shared, anyone holding it can extract everything.
+Encryption keeps holding on every copy and mirror.
 
-The draft implementation (removed before 1.0) had `is_public(entry,
-directory)` implementing the privacy rule of §3, and an export selection
-`--public` (keep what `is_public` allows) and `--role r` (keep these
-roles), combined with the name filters so that every given condition
-must hold.
+**Format.** `encryption=age`: the attachment's bytes are an age v1 file
+(<https://age-encryption.org/v1>). age is small, has maintained
+libraries for Rust, Go and JavaScript, and a command-line tool. It takes
+either of two kinds of recipient, never both in one file (age requires a
+passphrase to be the only recipient):
+
+* **X25519 keys**, any number: each player, a team key, a service's key.
+  A team channel is encrypted once to all of them.
+* **A passphrase** (scrypt): the simplest for a team that shares one
+  password.
+
+**Container.** The ciphertext is stored with codec 0 (it does not
+compress; Opus is compressed already, and a writer that wants to
+compress a transcript does so before encrypting). The ADIR `size` and
+`sha256` are of the ciphertext, so the hash reveals nothing about the
+plaintext, and the bundle hash (FORMAT.md §10) covers the encrypted
+bytes. mvdz itself does no cryptography: it stores and extracts bytes;
+the tools that make and play the tracks encrypt and decrypt.
+
+**Keys stay in clear.** `name`, `mime`, `role`, `player`, `slot`, `team`,
+`speaker`, `lang`, the timing keys and the size are not encrypted. This
+is deliberate: they say no more than the demo itself (who played, in
+which team, for how long), and they let tools list and sync tracks
+without a key. The size shows roughly how long a track is.
+
+**Changing access** is an ordinary attachment update (FORMAT.md §10):
+an **embargo** is a track encrypted to an organiser's or a service's key
+and replaced by its plaintext later; adding a recipient means
+re-encrypting and replacing the attachment.
+
+**Limits.**
+
+* **Key distribution.** Players have no keys today. A service that keeps
+  a key per account (and encrypts to the players of a match when the
+  track is uploaded) can make this automatic; that service is then
+  trusted with access, but copies of the file stay protected.
+* **No revocation.** Whoever decrypted a track once keeps the plaintext.
+  Replacing or re-encrypting the attachment protects only later copies.
+
+**Reference use: a web viewer.** A site such as mvdanalyzer.com serves
+the file unchanged; it holds only ciphertext. The page lists the
+encrypted tracks from their clear keys; the viewer pastes a passphrase
+or an age identity (`AGE-SECRET-KEY-1...`); the page decrypts in the
+browser and plays the track in sync with the demo. The key and the
+plaintext never reach the server; the page may remember the key in the
+browser. Caveat: the page's code comes from the server, so a compromised
+server could capture keys as they are typed. A viewer who does not trust
+the site decrypts with the age tool instead.
+
+Tools may still offer an export selection by `role` (keep these roles),
+combined with the name filters so that every given condition must hold.
 
 ## 5. Validation
 
 The draft writer refused malformed values of these keys: decimals as
-defined in §2, `slot` 0-255, `visibility` one of the three values, `lang`
+defined in §2, `slot` 0-255, `encryption` a known value whose bytes are
+stored with codec 0 and (for `age`) start with the age header line
+`age-encryption.org/v1`, `lang`
 as subtags of 1-8 ASCII letters or digits joined by `-` (at most 35
 bytes), `created` as `YYYY-MM-DDTHH:MM:SS[.frac]` with `Z` or `±HH:MM`,
 `time_map` as in §3, and a new attachment whose `ref` names no attachment
@@ -211,9 +251,9 @@ key were absent.
 4. Media time origin for Ogg Opus (granule position minus pre-skip) and
    for streams cut from a live source: is the rule in §3 what players
    (ezQuake, FTE, web players) can implement?
-5. Privacy default: private unless the role is commentary (or a public
-   transcript, or a non-audio analysis): too strict, too loose? What
-   should `team` mean when a tool does not know who is asking?
+5. Encryption: is age the right choice (rather than OpenPGP), and should
+   passphrases be allowed (simple for a team, but a passphrase file
+   cannot also be opened by a key)?
 6. Should player names be matched as Latin-1 code points of the demo's
    bytes (as in FORMAT.md §3.2) or in the QuakeWorld character set?
 7. One VOD over several demos: one copy per demo with its own map, or a
@@ -222,7 +262,9 @@ key were absent.
    scope for the format, or purely a tool?
 9. Does `ref` need to be in the format at all (transcripts are its only
    use), and what should a reader do with a dangling `ref`?
-10. Is visibility worth carrying at all, given that it is advisory?
+10. age does not reveal who a file is encrypted to. Does a viewer need a
+    hint of which key opens a track (a free-text `key_hint`, e.g. "team
+    blue password"), and is a hint itself a leak?
 
 **Feedback**: open an issue on GitHub
 (<https://github.com/galfthan/mvdz/issues>).
