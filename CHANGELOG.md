@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-rc.4
+
+Segmented files at the normal level share one set of rANS models (`-s 256K`
+7 % smaller, `-s 1M` 3 %), demos that record player inputs compress to
+about 0.10 of raw (42 % smaller), and normal-level compression is about a
+third faster.
+
+**Format change.** rc.3 cannot decode files written by this version with
+`-s` at the normal level (section `TABLES` is unknown to it and critical)
+or files holding usercmd blocks; this version cannot decode rc.3 files
+that hold usercmd blocks. Such files are refused, not decoded wrongly.
+Other files are unchanged in both directions.
 
 * **Shared models for segmented files** (format addition: section
   `TABLES`, kind 0x86, and back end 3; FORMAT.md §2.6, §8.4, §12 rule 11).
