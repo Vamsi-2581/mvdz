@@ -1,6 +1,6 @@
 # mvdz benchmarks
 
-Compression ratios, speeds and test campaigns of mvdz 1.0 (1.0.0-rc.3),
+Compression ratios, speeds and test campaigns of mvdz 1.0 (1.0.0-rc.4),
 measured on an archive of QuakeWorld MVD demos. MB = 10^6 bytes of **raw
 demo**; speeds are MB/s of raw demo, so a codec's speed does not depend on
 how well it compresses.
@@ -21,7 +21,7 @@ run to run and are given as the median over rounds, with [min-max]:
   busy over 5 s; the background services alone use 10-13 %).
 
 The tables were measured on rc.3. The normal level's compression speeds
-were measured again after its encoder got faster (Unreleased in
+were measured again after its encoder got faster (1.0.0-rc.4 in
 CHANGELOG.md; output byte-identical), on the same machine with the same
 build configurations and method, 7 rounds; the other figures stand (in
 the same runs, the release build before that change and the one after

@@ -99,7 +99,7 @@ typedef long long (*mvdz_write_fn)(void *user, const void *buf, size_t n);
 typedef struct mvdz_reader mvdz_reader;
 typedef struct mvdz_writer mvdz_writer;
 
-/* The library version, e.g. "1.0.0-rc.3"; a static string, do not free. */
+/* The library version, e.g. "1.0.0-rc.4"; a static string, do not free. */
 const char *mvdz_version(void);
 /* A message for an MVDZ_* code; a static string, do not free. */
 const char *mvdz_strerror(int code);
