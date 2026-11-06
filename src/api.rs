@@ -446,7 +446,8 @@ pub fn read_attachment_with<R: Read + Seek>(r: R, name: &str, limits: &Limits) -
 /// uses an unprefixed key (FORMAT.md §10.1).
 pub fn update_attachments_bytes(b: &[u8], remove: &[&str], add: &[Attachment]) -> Result<Vec<u8>> {
     check_new_attachments(add)?;
-    let budget = Budget::unlimited();
+    let budget = Budget::new(&Limits::default());
+    budget.input(b.len() as u64);
     let lay = scan_layout(&mut SliceSrc(b), &budget)?;
     let (_, t) = lay.trailer.ok_or(Error::Corrupt("no trailer"))?;
     let gone: std::collections::HashSet<&str> = remove

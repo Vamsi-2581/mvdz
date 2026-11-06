@@ -295,3 +295,87 @@ fn mutations_agree() {
         }
     }
 }
+
+/// A model header (FORMAT.md §8.3) of `n` own tables and the fallback,
+/// each with all 256 symbols present and pseudo-random q values: legal
+/// (rule M2 holds), and every table takes a 16 KiB slot LUT once built.
+fn wide_model(n: u32) -> Vec<u8> {
+    use mvdz::coder::rc::{Enc, IntModel};
+    const NQC: usize = 306;
+    let mut e = Enc::new();
+    let mut im = IntModel::new(NQC + 8);
+    let mut x = 1u32;
+    let mut q = || {
+        x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        1 + (x >> 16) % 12
+    };
+    im.put(&mut e, NQC, 256);
+    im.put(&mut e, NQC + 1, 2);
+    im.put(&mut e, NQC + 2, n);
+    let fb: Vec<u32> = (0..256).map(|_| q()).collect();
+    let mut prev = 0;
+    for &v in &fb {
+        im.put(&mut e, 17 * 17 + prev.min(16) as usize, v);
+        prev = v;
+    }
+    for t in 0..n {
+        im.put(&mut e, NQC + 3, (t > 0) as u32);
+        let mut prev = 0u32;
+        for &f in &fb {
+            let v = q();
+            im.put(&mut e, f.min(16) as usize * 17 + prev.min(16) as usize, v);
+            prev = v;
+        }
+    }
+    e.finish()
+}
+
+/// A large, legal TABLES section: the metadata and attachment paths check
+/// its grammar only (quickly, without building models: a 32 MiB budget is
+/// enough), while a decode builds its models under the reader's budget,
+/// which refuses them.
+#[test]
+fn large_tables() {
+    let demo = usercmd_demo();
+    let c = mvdz::compress(&demo, &cfg(Level::Normal, 8192)).unwrap();
+    let mut secs = sections(&c);
+    assert_eq!(secs[1].0, K_TABLES);
+    let m = wide_model(512);
+    let mut t = Vec::new();
+    put_uv(&mut t, mvdz::streams::N_LAZY as u64);
+    for sid in 0..mvdz::streams::N_LAZY {
+        put_uv(&mut t, sid as u64);
+        put_uv(&mut t, m.len() as u64);
+        t.extend_from_slice(&m);
+    }
+    secs[1].1 = t;
+    let b = build(0, true, &secs, true);
+    let small = mvdz::Limits {
+        memory: 32 << 20,
+        ..Default::default()
+    };
+    let t0 = Instant::now();
+    mvdz::read_metadata_with(Cursor::new(&b), &small).unwrap();
+    let data = b"note ".repeat(100);
+    let a = mvdz::Attachment {
+        name: "notes.txt".into(),
+        mime: "text/plain".into(),
+        kv: vec![],
+        data: data.clone(),
+    };
+    let with = mvdz::update_attachments_bytes(&b, &[], &[a]).unwrap();
+    let got = mvdz::read_attachment_with(Cursor::new(&with), "notes.txt", &small).unwrap();
+    assert!(got == data);
+    assert!(
+        t0.elapsed().as_secs_f64() < 10.0,
+        "TABLES checks took {:?}",
+        t0.elapsed()
+    );
+    // the models: 35 x 513 LUTs of 16 KiB, about 280 MiB
+    let lim = mvdz::Limits {
+        memory: 128 << 20,
+        ..Default::default()
+    };
+    let e = mvdz::decompress_with(&b, 1, &lim.into()).unwrap_err();
+    assert_eq!(e, Error::Limit("memory"));
+}

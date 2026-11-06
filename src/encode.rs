@@ -2,6 +2,8 @@
 //! decodes to the input (falling back per segment to zstd or stored bytes).
 
 use crate::budget::{Budget, Limits};
+use crate::coder::BE_FILE;
+use crate::coder::rans::Shared;
 use crate::decode::{SliceSrc, decode_segment, scan_layout};
 use crate::error::{Error, Result};
 use crate::format::*;
@@ -110,7 +112,8 @@ pub fn raw_body(s: &[u8], level: Level, raw_off: u64, t_start: u64) -> Vec<u8> {
 }
 
 /// The SEGMENT section body of a walked segment, or None if it breaks the
-/// ratio limit.
+/// ratio limit; `shared`: the file's shared models (empty: none).
+#[allow(clippy::too_many_arguments)]
 pub fn transform_body(
     s: &[u8],
     wk: &Walked,
@@ -120,9 +123,12 @@ pub fn transform_body(
     dinfo_off: u64,
     threads: usize,
     st: &mut Vec<StreamStat>,
+    shared: &[Option<Shared>],
 ) -> Option<Vec<u8>> {
     let mut b = seg_hdr_bytes(raw_off, s.len() as u64, t_start, crc32(s), C_TRANSFORM);
-    b.extend_from_slice(&segment::encode(s, wk, level, dinfo_off, threads, st));
+    b.extend_from_slice(&segment::encode(
+        s, wk, level, dinfo_off, threads, st, shared,
+    ));
     seg_ratio_ok(s.len() as u64, b.len() as u64).then_some(b)
 }
 
@@ -161,13 +167,27 @@ fn compress_inner(src: &[u8], cfg: &Config, force_raw: bool) -> Result<(Vec<u8>,
     } else {
         (1, threads)
     };
+    // a segmented file at the normal level: one model per rANS stream from
+    // its symbols in every segment, in the TABLES section (FORMAT.md §12)
+    let shared = if cfg.level == Level::Normal && nseg > 1 && !force_raw {
+        let segs: Vec<(&[u8], &Walked)> = plans
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| Some((&src[cuts[i]..cuts[i + 1]], p.walked.as_ref()?)))
+            .collect();
+        segment::train(&segs, threads)
+    } else {
+        Vec::new()
+    };
     // segments the transform could not code: raw from the start
     let mut raw: Vec<bool> = plans
         .iter()
         .map(|p| force_raw || p.walked.is_none())
         .collect();
     for _round in 0..2 {
-        let (out, info) = assemble(src, &cuts, &plans, &raw, &md0, cfg.level, outer, inner)?;
+        let (out, info) = assemble(
+            src, &cuts, &plans, &raw, &md0, cfg.level, &shared, outer, inner,
+        )?;
         if !cfg.verify {
             return Ok((out, info));
         }
@@ -198,6 +218,7 @@ fn assemble(
     raw: &[bool],
     md0: &Metadata,
     level: Level,
+    shared: &[Option<Shared>],
     outer: usize,
     inner: usize,
 ) -> Result<(Vec<u8>, Info)> {
@@ -223,6 +244,7 @@ fn assemble(
                 doff[i],
                 inner,
                 &mut st,
+                shared,
             ) {
                 return (b, false, st);
             }
@@ -242,10 +264,21 @@ fn assemble(
     }
     if md_final.demoinfo != md.demoinfo {
         let raw2: Vec<bool> = bodies.iter().map(|b| b.1).collect();
-        return assemble(src, cuts, plans, &raw2, md0, level, outer, inner);
+        return assemble(src, cuts, plans, &raw2, md0, level, shared, outer, inner);
     }
     let mut out = prefix(0, PREFIX_LEN as u64);
     section(&mut out, K_META, &md.encode_for(level)?);
+    // TABLES: the shared model of every stream some segment codes with it
+    let mut used = vec![false; shared.len()];
+    for st in bodies.iter().flat_map(|b| &b.2) {
+        if st.be == BE_FILE {
+            used[st.id] = true;
+        }
+    }
+    let ids: Vec<usize> = (0..used.len()).filter(|&sid| used[sid]).collect();
+    if !ids.is_empty() {
+        section(&mut out, K_TABLES, &segment::tables_body(shared, &ids));
+    }
     let mut index = Index {
         size: src.len() as u64,
         crc: crc32(src),

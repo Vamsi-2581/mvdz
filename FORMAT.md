@@ -145,21 +145,23 @@ not know, without reading its body.
 | 0x03 | INDEX | no | whole-demo size, CRC and duration; the segments (§4) | one |
 | 0x04 | ATTACH | no | one attachment's stored bytes (§10) | any |
 | 0x05 | ADIR | no | the attachment directory (§10) | one |
+| 0x86 | TABLES | yes | rANS models shared by the segments (§2.6) | one |
 | 0x7F | TRAILER | no | offsets of INDEX, META, ADIR; end of the demo part (§2.3) | one, last |
 
 **Order.** A file has two parts:
 
 * the *demo part*: META, the SEGMENT sections in demo order, then INDEX
   (META may come before, between or after segments; §5.3 says when it must
-  come first);
+  come first); a TABLES section, if any, comes before every SEGMENT;
 * the *attachment part*, from the first ATTACH or ADIR section on: ATTACH
   sections, then the ADIR.
 
 Then the TRAILER. Unknown non-critical sections may appear anywhere before
 the trailer (those in the attachment part do not survive a change of the
-attachments, §10). Every one of these is an error: a second META, INDEX or ADIR;
-a SEGMENT after the INDEX; a META, SEGMENT or INDEX in the attachment part;
-an ATTACH after the ADIR; ATTACH sections without an ADIR; a TRAILER that
+attachments, §10). Every one of these is an error: a second META, INDEX,
+ADIR or TABLES; a SEGMENT after the INDEX; a TABLES after a SEGMENT or the
+INDEX; a META, SEGMENT, INDEX or TABLES in the attachment part; an ATTACH
+after the ADIR; ATTACH sections without an ADIR; a TRAILER that
 is not the last 49 bytes of the file; any byte after the trailer.
 
 ### 2.3 Trailer
@@ -190,13 +192,41 @@ a recorder's crash loses only the tail.
 A reader must not depend on these beyond the rules above.
 
 * One shot (`encode.rs:compress`): `prefix (meta_off = 16) | META |
-  SEGMENT* | INDEX | TRAILER`.
+  [TABLES] | SEGMENT* | INDEX | TRAILER`. TABLES only in a file of more
+  than one segment at the normal level (§12 rule 11).
 * Streaming (`stream.rs:StreamEncoder`, §11): `prefix (flags = 1,
   meta_off = 0) | SEGMENT* | META | SEGMENT* | INDEX | TRAILER`. The
   segments that share KTX demoinfo (§5.3) and all segments after the first
   of them follow the META.
 * Attachments (`api.rs:update_attachments_bytes`): the demo part, copied
   byte for byte, then `ATTACH* | ADIR | TRAILER`.
+* The streaming encoder never writes TABLES.
+
+### 2.6 TABLES (`rans.rs:FileTables`)
+
+rANS models stored once per file and used by every segment that names
+back end 3 for a stream (§8.4), instead of a model header in each
+segment's stream. A decoder carries no trained data of its own: every
+model it uses is in the file.
+
+```
+TABLES body := n uv | n x { sid uv | len uv | model[len] }
+```
+
+* `n >= 1`. `sid`: a structural or numeric stream id (§5.4), the ids
+  strictly increasing (each at most once). The body is consumed exactly;
+  at most 2^24 bytes.
+* `model`: a model header as in §8.3 ("Model header", `hdr_len = len`),
+  read with the same rules (alphabet 256 for a structural stream, 65 for a
+  numeric one; consumed exactly; M2 with the header's length), except
+  that M1 has no stream count here: `n <= 65535`.
+* Every reader checks these rules when it meets the section (§9 rule 8).
+  A decoder builds the models before it decodes a segment that uses one
+  (once per file; a reader that seeks to a segment finds TABLES among the
+  section headers before the first SEGMENT). They do not change while
+  segments are decoded.
+* Placement and multiplicity: §2.2. Critical, because the segments that
+  use it cannot be decoded without it.
 
 ---------------------------------------------------------------------------
 
@@ -520,10 +550,10 @@ stream bodies, concatenated in table order (body k is len_k bytes)
   segment start (§6.1). `tail` (<= raw_len): length of the unframeable
   bytes at the end of the segment.
 * `nstreams` <= 384. Per entry: `id` must be a structural, numeric or blob
-  id (§5.4), each at most once; `backend` 0 store, 1 zstd, 2 rans for
-  structural and numeric streams, 0 or 1 for blobs, else an error; `count`
-  (symbols, values or bytes) <= raw_len + 16. The bodies must end exactly
-  at the end of the section.
+  id (§5.4), each at most once; `backend` 0 store, 1 zstd, 2 rans, 3 rans
+  with the file's model (§8.4) for structural and numeric streams, 0 or 1
+  for blobs, else an error; `count` (symbols, values or bytes) <= raw_len
+  + 16. The bodies must end exactly at the end of the section.
 * A structural or numeric stream absent from the table has no symbols:
   reading a symbol or value from it is an error. An absent blob stream is
   an empty byte array: reading 0 bytes from it succeeds (an empty `tail`,
@@ -1461,6 +1491,7 @@ has no effect on the bits.
 | 0 | store | raw bytes | zigzag LEB128 | raw bytes |
 | 1 | zstd | zstd of the bytes | zstd of the LEB128 bytes | zstd |
 | 2 | rans | static rANS, per-context tables | rANS bucket + raw mantissa bits | — (error) |
+| 3 | rans, file model | as 2, the model from TABLES | as 2, the model from TABLES | — (error) |
 
 Other ids → error. `count` below is the stream's `count` from the table.
 
@@ -1685,6 +1716,19 @@ min(v, m)`:
 Count rule: the stream is complete iff exactly `count` symbols were
 requested and the end-of-stream checks above pass.
 
+### 8.4 rans with the file's model (3)
+
+```
+rans_len uv | rans (rans_len bytes) | extra (rest of body)
+```
+
+Back end 2 without its `hdr_len | hdr` prefix: the model is the TABLES
+entry (§2.6) for the stream's id; everything after the model
+(the coder, the symbols, the end-of-stream and count checks) is §8.3
+unchanged. A stream that names back end 3 in a file without TABLES, or
+without an entry for its id, is corrupt. Several segments, and several
+threads, decode with the same model at once; decoding never changes it.
+
 ---------------------------------------------------------------------------
 
 ## 9. Validation rules and limits
@@ -1719,6 +1763,10 @@ and every segment header (one small read each).
    and unique, keys unique within an entry, names, MIME types, keys and
    values UTF-8; one entry per ATTACH section in the same order, with
    equal offset and `stored` length (§10).
+8. TABLES: at most 2^24 bytes, grammar, ids, consumed exactly, and every
+   model header's rules (alphabet, M1, M2, consumed exactly; §2.6, §8.3).
+   Checking them needs no decoder model: a reader that decodes no
+   segment (metadata, attachments) need not build one.
 
 **Content rules** (a full decode): every check of §5.5 (including the
 rest of each transform header, §5.2) and §8.
@@ -1751,10 +1799,10 @@ checks; the hostile vectors each break one rule only.
 | attachment ratio (zstd codec) | `size <= 1024 x stored + 4096` | §10 |
 | stream count, stream table | `nstreams <= 384`, `count <= raw_len + 16` | §5.2 |
 | numeric zstd body | at most `5 x count` bytes | §8.2 |
-| model tables (M1) | `n <= min(65535, count)` | §8.3 |
+| model tables (M1) | `n <= min(65535, count)`; in TABLES `n <= 65535` | §8.3, §2.6 |
 | model decisions (M2) | `<= 128 x header length + 1024` | §8.3 |
 | META fields | 2^24 bytes | §3 |
-| INDEX, ADIR sections | 2^24 bytes | §4, §10 |
+| INDEX, ADIR, TABLES sections | 2^24 bytes | §4, §10, §2.6 |
 | roster | 256 entries | §3 |
 | META ratio | `raw_len <= 1024 x L + 4096` (L: META body length) | §3 |
 | rANS model header | consumed exactly | §8.3 |
@@ -1922,8 +1970,8 @@ The streaming encoder compresses a demo that is still being recorded:
   back to zstd or stored bytes on a mismatch), and writes it at once. Bytes
   that do not form a whole frame wait for more data; at the end they are
   the last segment.
-* Every segment is self-contained (its models are in its streams), so the
-  file can be read while it grows.
+* Every segment is self-contained (its models are in its streams; the
+  writer never writes TABLES), so the file can be read while it grows.
 * At the end it writes META (now that the identity, census and demoinfo
   are known), the segments held back (the first segment that shares
   demoinfo and every segment after it: they are coded when they fill and
@@ -1942,8 +1990,8 @@ A reader finds the metadata of a streamed file through the trailer
 ### 11.2 Reading sequentially (`stream.rs:Reader::new`)
 
 A sequential reader processes sections in file order, applying §9 as they
-arrive: it keeps META, INDEX and ADIR (bounded sizes), decodes each
-SEGMENT and delivers its bytes once the segment's own checks pass, skips
+arrive: it keeps META, INDEX, ADIR and TABLES (bounded sizes), decodes
+each SEGMENT and delivers its bytes once the segment's own checks pass, skips
 ATTACH and unknown sections without buffering them, and at the TRAILER
 runs the cross-checks of §9 and the whole-demo checks of §5.5 before
 reporting the end. A stream that ends without its trailer yields its
@@ -1970,11 +2018,13 @@ of rule 10).
    `SF_DINFO`, only if it has any) if the store stays within 4 MiB with
    them; otherwise they stay in `hid.misc`.
 4. **Back ends** (`segment.rs:pack_best`): normal level, structural and
-   numeric streams: rans; if the model breaks M1 or M2, the smaller of
-   store and zstd. Blobs, and every stream at the fast level: the smaller
-   of store and zstd (store on a tie). Streams are written in id order,
-   empty streams omitted. rans tries `steps` 2 and 4 and keeps the smaller
-   (2 on a tie).
+   numeric streams: rans (back end 3 if the stream has a shared model,
+   rule 11, else 2); if the model breaks M1 or M2, the smaller of store
+   and zstd. Blobs, and every stream at the fast level: the smaller of
+   store and zstd (store on a tie). Streams are written in id order,
+   empty streams omitted. A model in the segment (back end 2) tries
+   `steps` 2 and 4 and keeps the smaller (2 on a tie); shared models use
+   `steps` 2 (rule 11).
 5. **Segment coding**: transform, unless the walk cannot represent the
    segment, its section would break the ratio limit, or decoding it does
    not give the input (one-shot: the whole file is decoded and compared;
@@ -2003,6 +2053,14 @@ of rule 10).
     that does not save more than 1/32 of it, it is stored; otherwise it is
     compressed at level 19 and the §10 rule applies. A decoder does not
     depend on any of this: every zstd level reads the same.
+11. **Shared models** (`segment.rs:train`): in a one-shot file of more
+    than one segment at the normal level, each structural and numeric
+    stream gets one model, built as in rule 6 from its counts summed over
+    all segments, with `steps` 2; a stream whose model breaks M2 has none
+    (it keeps a model in each segment, back end 2). While the models
+    would make TABLES larger than 2^24 bytes, the one with the largest
+    header is dropped. TABLES, after META, holds the model of every
+    stream that some segment codes with back end 3.
 
 ---------------------------------------------------------------------------
 
@@ -2085,6 +2143,12 @@ of rule 10).
     segments) can still verify the share layout from the segment headers.
     The share of a flagged segment is never empty, so tag 3 is present
     exactly when some segment is flagged.
+22. **TABLES models are shared**: build them once per file, when the
+    first segment that uses them is decoded, and hand the same read-only
+    model to every segment's decoder (the reference shares them between
+    threads). Their memory counts once against a budget, not per segment.
+    Opening a file only checks the section (§9 rule 8), so a hostile
+    TABLES costs a metadata reader no model memory.
 
 ---------------------------------------------------------------------------
 

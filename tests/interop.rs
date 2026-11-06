@@ -67,6 +67,7 @@ fn go_decoder_agrees() {
         for level in [mvdz::Level::Normal, mvdz::Level::Fast] {
             for c in [
                 mvdz::compress(&src, &cfg(level, 0)).unwrap(),
+                mvdz::compress(&src, &cfg(level, 300_000)).unwrap(),
                 stream(&src, &cfg(level, 300_000)),
             ] {
                 std::fs::write(&tmp, &c).unwrap();

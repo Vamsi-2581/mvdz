@@ -5,6 +5,7 @@
 //! | 0  | store | bytes                    | zigzag LEB128                      | bytes        |
 //! | 1  | zstd  | zstd of the bytes        | zstd of the LEB128 bytes           | zstd         |
 //! | 2  | rans  | static rANS, ctx tables  | static rANS bucket + mantissa bits | (not allowed)|
+//! | 3  | rans  | as 2, model from TABLES  | as 2, model from TABLES            | (not allowed)|
 
 pub mod rans;
 pub mod rc;
@@ -13,11 +14,28 @@ use crate::budget::Budget;
 use crate::error::{Error, Result};
 use crate::numeric::NCtx;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 pub const BE_STORE: u8 = 0;
 pub const BE_ZSTD: u8 = 1;
 pub const BE_RANS: u8 = 2;
-pub const BE_NAMES: [&str; 3] = ["store", "zstd", "rans"];
+/// rANS with the model from the file's TABLES section.
+pub const BE_FILE: u8 = 3;
+
+/// The file's model of stream `sid` coded with back end `be`: its TABLES
+/// entry for back end 3 (an error without one), None for the others.
+pub(crate) fn file_model(
+    be: u8,
+    fm: Option<&rans::Models>,
+    sid: usize,
+) -> Result<Option<&Arc<rans::DModel>>> {
+    if be != BE_FILE {
+        return Ok(None);
+    }
+    fm.and_then(|m| m.get(sid)?.as_ref())
+        .map(Some)
+        .ok_or(Error::Corrupt("back end 3 without a TABLES model"))
+}
 
 #[inline]
 pub fn zigzag(v: i32) -> u32 {
@@ -44,21 +62,36 @@ fn leb_vals(vals: &[(NCtx, i32)]) -> Vec<u8> {
     out
 }
 
-/// Encodes a structural stream with back end `be` (None: not allowed).
-pub fn encode_lazy(be: u8, syms: &[u8], ctxs: &[u32], zlevel: i32) -> Option<Vec<u8>> {
+/// Encodes a structural stream with back end `be` (None: not allowed);
+/// `file` is the stream's shared model, for back end 3.
+pub fn encode_lazy(
+    be: u8,
+    syms: &[u8],
+    ctxs: &[u32],
+    zlevel: i32,
+    file: Option<&rans::Shared>,
+) -> Option<Vec<u8>> {
     match be {
         BE_STORE => Some(syms.to_vec()),
         BE_ZSTD => Some(crate::zst::compress(syms, zlevel)),
-        BE_RANS => rans::encode_bytes(syms, ctxs),
+        BE_RANS => rans::encode_bytes(syms, ctxs, None),
+        BE_FILE => rans::encode_bytes(syms, ctxs, Some(file?)),
         _ => None,
     }
 }
 
-pub fn encode_num(be: u8, sid: usize, vals: &[(NCtx, i32)], zlevel: i32) -> Option<Vec<u8>> {
+pub fn encode_num(
+    be: u8,
+    sid: usize,
+    vals: &[(NCtx, i32)],
+    zlevel: i32,
+    file: Option<&rans::Shared>,
+) -> Option<Vec<u8>> {
     match be {
         BE_STORE => Some(leb_vals(vals)),
         BE_ZSTD => Some(crate::zst::compress(&leb_vals(vals), zlevel)),
-        BE_RANS => rans::encode_num(sid, vals),
+        BE_RANS => rans::encode_num(sid, vals, None),
+        BE_FILE => rans::encode_num(sid, vals, Some(file?)),
         _ => None,
     }
 }
@@ -113,13 +146,26 @@ pub enum LazyDec<'a> {
 }
 
 impl<'a> LazyDec<'a> {
-    pub fn new(be: u8, body: &'a [u8], n: usize, budget: &Budget) -> Result<LazyDec<'a>> {
+    /// `fm`: the file's models, for back end 3.
+    pub(crate) fn new(
+        be: u8,
+        sid: usize,
+        body: &'a [u8],
+        n: usize,
+        fm: Option<&rans::Models>,
+        budget: &Budget,
+    ) -> Result<LazyDec<'a>> {
         Ok(match be {
             BE_STORE | BE_ZSTD => LazyDec::Bytes(Cursor {
                 b: decode_blob(be, body, n)?,
                 i: 0,
             }),
-            BE_RANS => LazyDec::Rans(Box::new(rans::ByteDec::new(body, n, budget)?)),
+            BE_RANS | BE_FILE => LazyDec::Rans(Box::new(rans::ByteDec::new(
+                body,
+                n,
+                file_model(be, fm, sid)?,
+                budget,
+            )?)),
             _ => return Err(Error::Corrupt("back end")),
         })
     }
@@ -151,11 +197,13 @@ pub enum NumDec<'a> {
 }
 
 impl<'a> NumDec<'a> {
-    pub fn new(
+    /// `fm`: the file's models, for back end 3.
+    pub(crate) fn new(
         be: u8,
         sid: usize,
         body: &'a [u8],
         n: usize,
+        fm: Option<&rans::Models>,
         budget: &Budget,
     ) -> Result<NumDec<'a>> {
         Ok(match be {
@@ -174,7 +222,13 @@ impl<'a> NumDec<'a> {
                 },
                 n,
             ),
-            BE_RANS => NumDec::Rans(Box::new(rans::NumDec::new(sid, body, n, budget)?)),
+            BE_RANS | BE_FILE => NumDec::Rans(Box::new(rans::NumDec::new(
+                sid,
+                body,
+                n,
+                file_model(be, fm, sid)?,
+                budget,
+            )?)),
             _ => return Err(Error::Corrupt("back end")),
         })
     }

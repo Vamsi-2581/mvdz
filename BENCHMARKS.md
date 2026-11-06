@@ -64,7 +64,8 @@ demos count for more).
 |---|---|---|
 | mvdz normal | 0.211 [0.206-0.216] | 0.328 [0.320-0.338] |
 | mvdz fast | 0.255 [0.250-0.261] | 0.397 [0.388-0.407] |
-| mvdz normal, `-s 1M` | 0.219 | |
+| mvdz normal, `-s 256K` | 0.218 | |
+| mvdz normal, `-s 1M` | 0.213 | |
 | mvdz fast, `-s 1M` | 0.259 | |
 | archive gzip | 0.642 [0.635-0.648] | 1 |
 | gzip -9 | 0.614 | |
@@ -94,9 +95,29 @@ is 114,248 bytes at normal and 84,017 at fast. It is not a cold start on a
 small file: eight copies of the same demo in a row cost normal 2.2 bytes
 per float coordinate, as one copy does, while zstd codes the copies almost
 for free. On the real FTE float-coordinate vector (`float-fte`) normal is
-the smaller (0.411 against 0.450 of raw). Segmenting costs about +2 to +4 %
-at `-s 1M` (+3.8 % normal, +1.6 % fast; 64 KiB segments: about +29 % on
-sample40).
+the smaller (0.411 against 0.450 of raw). Segmenting costs about +1 to +2 %
+at `-s 1M` (+0.9 % normal, +1.6 % fast). At the normal level the segments
+of a one-shot file share one model per rANS stream, stored once (the
+TABLES section, FORMAT.md §2.6); with a model in every segment, as the
+streaming writer still writes them, `-s 1M` costs +3.8 % (0.219) and
+`-s 256K` +11 % (0.235; with shared models 0.218, +3.3 %). On set8 and three
+full-size 4on4 demos (12.8-14.2 MB raw each), at the normal level:
+
+| | set8, `-s 64K` | set8, `-s 256K` | set8, `-s 1M` | 4on4s, `-s 64K` | 4on4s, `-s 256K` | 4on4s, `-s 1M` |
+|---|---:|---:|---:|---:|---:|---:|
+| a model in every segment | 0.2696 | 0.2351 | 0.2191 | 0.2393 | 0.2076 | 0.1921 |
+| shared models (TABLES) | 0.2345 | 0.2187 | 0.2134 | 0.2054 | 0.1888 | 0.1833 |
+| one segment | 0.2118 | 0.2118 | 0.2118 | 0.1806 | 0.1806 | 0.1806 |
+
+At `-s 256K`, one thread (`mvdz bench --levels normal -s 256K -j 1` on
+set8, median of 5 idle-gated rounds, release builds with and without
+shared models): compression 6.1 [5.8-6.4] to 8.0 [7.7-8.1] MB/s (the
+segments code with the file's models instead of building their own),
+decoding 22.8 [21.0-24.1] to 25.5 [24.6-26.1] MB/s (each shared model is
+built once per file, not once per segment). The models are trained from
+per-context counts summed over the segments: compressing a 14.2 MB 4on4
+demo with one thread peaks at 96 MB at `-s 256K` and 94 MB at `-s 1M`
+(87 MB for both with a model in every segment); one segment, 133 MB.
 
 **By era** (year of the demo; byte-weighted, archive-weighted, 95 %
 intervals; the 9 demos before 2007 are merged into the first group):
@@ -238,6 +259,53 @@ SHA-256 and keeps every CRC-32C check. Library decode, one thread, set8:
 CRC-32C uses the SSE4.2 instruction (detected at run time) at about 3-6
 GB/s: the two CRC passes are a few percent of a trusted decode.
 
+## Fastest settings
+
+Two checks can be switched off when speed matters more than checking:
+
+* **Compression without verification.** By default the encoder decodes
+  every segment it has written and compares it with the input, storing a
+  segment with zstd (or uncompressed) if they differ. This
+  is a quarter to a third of the compression time. Library
+  `Config { verify: false, .. }`; `mvdz bench --no-verify`. `mvdz
+  compress` and the C writer always verify. Without it an encoder bug
+  would not be caught when the file is written: a full decode still
+  refuses such a file (its SHA-256 does not match), but the original demo
+  must still exist to recover it.
+* **Trusted decoding.** `--trusted` (library `ReadOptions::trusted`, C
+  `MVDZ_TRUSTED`) skips the SHA-256 of the decoded demo and keeps every
+  CRC-32C check (see above). Use it only for files whose identity has
+  already been checked once, for example in a cache.
+
+The fastest build is the release -v3 download (or a glibc build with
+`target-cpu=native`, see Builds). Release -v3, set8, `mvdz bench --levels
+normal,fast -r 1 -j 4 [-s 256K] [--no-verify --trusted]`, median of 5
+interleaved idle-gated rounds, MB/s of raw demo (default → both checks
+off):
+
+| | whole file | `-s 256K` |
+|---|---:|---:|
+| compress, normal, 1t | 8.3 → 10.9 | 8.0 → 11.3 |
+| compress, normal, 4t | 11.9 → 17.4 | 11.3 → 16.4 |
+| compress, normal, batch | 19.9 → 27.0 | 19.4 → 25.1 |
+| decode, normal, 1t | 30.5 → 37.5 | 28.5 → 32.6 |
+| decode, normal, 4t | 38.4 → 50.6 | 35.5 → 50.7 |
+| decode, normal, batch | 82 → 91 | 77 → 91 |
+| compress, fast, 1t | 13.2 → 19.2 | 11.8 → 17.4 |
+| compress, fast, 4t | 17.9 → 28.0 | 14.2 → 23.4 |
+| compress, fast, batch | 31 → 43 | 23 → 37 |
+| decode, fast, 1t | 48.0 → 66.0 | 36.1 → 45.6 |
+| decode, fast, 4t | 50.2 → 79.1 | 36.4 → 52.3 |
+| decode, fast, batch | 108 → 151 | 54 → 64 |
+
+(Batch = the 8 files in parallel on 4 threads, one thread each. The
+release build without -v3 is 0-15 % slower; its figures are in the raw
+results.) Switching both checks off makes compression about 1.3 to 1.6
+times and decoding about 1.1 to 1.6 times faster. The fastest way to
+compress is the fast level with verification off, several files at once
+(43 MB/s); the fastest way to decode is a trusted batch of whole-file
+fast-level files (151 MB/s) or, for one file, 4 threads (79 MB/s).
+
 ## Correctness campaigns
 
 Every round trip below compares the decoded demo with the original by
@@ -258,6 +326,9 @@ conformance decoder and fuzzing.
 | pure-Rust zstd decoder (as on wasm) | 40 | 2 | 80 | 0 |
 | rc.3 (contexts, zstd levels): holdout | 200 | normal, fast | 400 | 0 |
 | rc.3: stratified, compression self-check | 585 | normal, fast, both at `-s 1M` | 2,340 | 0 |
+| shared models: stratified, compression self-check, decoded by the library and the Go conformance decoder | 581 (4 are not MVD demos: refused) | normal `-s 256K` | 581 | 0 |
+| shared models: set8 and three 4on4 demos, decoded by the library and the Go conformance decoder | 11 | normal at `-s 64K`, `-s 256K` and `-s 1M` | 33 | 0 |
+| shared models: stratified, compression self-check; decoded with 1 and 4 threads, by the Go conformance decoder and by the sequential reader with 1 and 4 threads; segmented files also seeked to the middle and the last segment with 1 and 4 threads | 585 (4 not MVD demos, compressed with `--allow-non-demo`) | normal whole, normal `-s 64K`, `-s 256K` and `-s 1M`, fast `-s 256K` | 2,925 files (29,880 segments) | 0 |
 
 No segment of a real demo fell back to raw storage in any campaign.
 
@@ -273,6 +344,9 @@ cargo-fuzz with AddressSanitizer, `-rss_limit_mb=1536`:
 * post-review: all 8 targets (also capi, compress_rt and the
   structure-aware gen_rt), 4 minutes each, and the attachment and C
   targets again after the 1.0 restructure.
+* shared models (TABLES): decode, stream_reader and compress_rt 5 hours
+  each, read_metadata and gen_rt 2.5 hours each; stream_writer, attachments
+  and capi were not run.
 
 No crash, leak, out-of-memory or timeout in any run. Miri (`cargo +nightly
 miri test --lib`) passes the round-trip, rANS, numeric, CRC and threading

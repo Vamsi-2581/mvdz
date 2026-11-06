@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+* **Shared models for segmented files** (format addition: section
+  `TABLES`, kind 0x86, and back end 3; FORMAT.md §2.6, §8.4, §12 rule 11).
+  `compress -s` at the normal level builds one model per rANS stream from
+  that stream's symbols in every segment, stores the models once, before
+  the first segment, and every segment codes those streams with them.
+  Segments stay independently decodable. On the stratified sample
+  (archive-weighted) `-s 256K` is 0.218 of raw instead of 0.235 and `-s 1M`
+  0.213 instead of 0.219 (1 MiB segments now cost 0.9 % over one segment,
+  not 3.8 %); full-size 4on4 demos shrink by 14 % at `-s 64K`, 9 % at
+  `-s 256K` and 4.6 % at `-s 1M`. Whole files, the fast level and the
+  streaming writer do not use TABLES. Readers only check the section when
+  they open a file; the models are built once, under the reader's
+  budget, when the first segment that uses them is decoded, so metadata
+  and attachment tools never build them. At `-s 256K`, one thread, on
+  set8: compression 6.1 to 8.0 MB/s (no model is built per segment),
+  decoding 22.8 to 25.5 MB/s. The models are trained from per-context
+  counts summed over the segments; compressing a 14.2 MB 4on4 demo with
+  one thread peaks at 96 MB at `-s 256K` and 94 MB at `-s 1M` (87 MB
+  without shared models, 133 MB for one segment). Attachment updates now
+  read the file under the default limits.
+
 * **usercmd blocks coded field by field** (format change: streams `uc`
   and `uc.a`; FORMAT.md §6.11, §7.6). mvdsv can record every player
   input as a hidden block (type 1, 23 bytes: `SV_DebugClientCommand`);
