@@ -281,6 +281,7 @@ conformance decoder and fuzzing.
 | rc.3: stratified, compression self-check | 585 | normal, fast, both at `-s 1M` | 2,340 | 0 |
 | shared models: stratified, compression self-check, decoded by the library and the Go conformance decoder | 581 (4 are not MVD demos: refused) | normal `-s 256K` | 581 | 0 |
 | shared models: set8 and three 4on4 demos, decoded by the library and the Go conformance decoder | 11 | normal at `-s 64K`, `-s 256K` and `-s 1M` | 33 | 0 |
+| shared models: stratified, compression self-check; decoded with 1 and 4 threads, by the Go conformance decoder and by the sequential reader with 1 and 4 threads; segmented files also seeked to the middle and the last segment with 1 and 4 threads | 585 (4 not MVD demos, compressed with `--allow-non-demo`) | normal whole, normal `-s 64K`, `-s 256K` and `-s 1M`, fast `-s 256K` | 2,925 files (29,880 segments) | 0 |
 
 No segment of a real demo fell back to raw storage in any campaign.
 
@@ -296,6 +297,9 @@ cargo-fuzz with AddressSanitizer, `-rss_limit_mb=1536`:
 * post-review: all 8 targets (also capi, compress_rt and the
   structure-aware gen_rt), 4 minutes each, and the attachment and C
   targets again after the 1.0 restructure.
+* shared models (TABLES): decode, stream_reader and compress_rt 5 hours
+  each, read_metadata and gen_rt 2.5 hours each; stream_writer, attachments
+  and capi were not run.
 
 No crash, leak, out-of-memory or timeout in any run. Miri (`cargo +nightly
 miri test --lib`) passes the round-trip, rANS, numeric, CRC and threading
