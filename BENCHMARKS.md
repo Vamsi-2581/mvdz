@@ -259,6 +259,53 @@ SHA-256 and keeps every CRC-32C check. Library decode, one thread, set8:
 CRC-32C uses the SSE4.2 instruction (detected at run time) at about 3-6
 GB/s: the two CRC passes are a few percent of a trusted decode.
 
+## Fastest settings
+
+Two checks can be switched off when speed matters more than checking:
+
+* **Compression without verification.** By default the encoder decodes
+  every segment it has written and compares it with the input, storing a
+  segment with zstd (or uncompressed) if they differ. This
+  is a quarter to a third of the compression time. Library
+  `Config { verify: false, .. }`; `mvdz bench --no-verify`. `mvdz
+  compress` and the C writer always verify. Without it an encoder bug
+  would not be caught when the file is written: a full decode still
+  refuses such a file (its SHA-256 does not match), but the original demo
+  must still exist to recover it.
+* **Trusted decoding.** `--trusted` (library `ReadOptions::trusted`, C
+  `MVDZ_TRUSTED`) skips the SHA-256 of the decoded demo and keeps every
+  CRC-32C check (see above). Use it only for files whose identity has
+  already been checked once, for example in a cache.
+
+The fastest build is the release -v3 download (or a glibc build with
+`target-cpu=native`, see Builds). Release -v3, set8, `mvdz bench --levels
+normal,fast -r 1 -j 4 [-s 256K] [--no-verify --trusted]`, median of 5
+interleaved idle-gated rounds, MB/s of raw demo (default → both checks
+off):
+
+| | whole file | `-s 256K` |
+|---|---:|---:|
+| compress, normal, 1t | 8.3 → 10.9 | 8.0 → 11.3 |
+| compress, normal, 4t | 11.9 → 17.4 | 11.3 → 16.4 |
+| compress, normal, batch | 19.9 → 27.0 | 19.4 → 25.1 |
+| decode, normal, 1t | 30.5 → 37.5 | 28.5 → 32.6 |
+| decode, normal, 4t | 38.4 → 50.6 | 35.5 → 50.7 |
+| decode, normal, batch | 82 → 91 | 77 → 91 |
+| compress, fast, 1t | 13.2 → 19.2 | 11.8 → 17.4 |
+| compress, fast, 4t | 17.9 → 28.0 | 14.2 → 23.4 |
+| compress, fast, batch | 31 → 43 | 23 → 37 |
+| decode, fast, 1t | 48.0 → 66.0 | 36.1 → 45.6 |
+| decode, fast, 4t | 50.2 → 79.1 | 36.4 → 52.3 |
+| decode, fast, batch | 108 → 151 | 54 → 64 |
+
+(Batch = the 8 files in parallel on 4 threads, one thread each. The
+release build without -v3 is 0-15 % slower; its figures are in the raw
+results.) Switching both checks off makes compression about 1.3 to 1.6
+times and decoding about 1.1 to 1.6 times faster. The fastest way to
+compress is the fast level with verification off, several files at once
+(43 MB/s); the fastest way to decode is a trusted batch of whole-file
+fast-level files (151 MB/s) or, for one file, 4 threads (79 MB/s).
+
 ## Correctness campaigns
 
 Every round trip below compares the decoded demo with the original by

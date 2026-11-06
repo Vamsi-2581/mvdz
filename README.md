@@ -139,7 +139,9 @@ demo, and by default the SHA-256 identity (about 20 % of the decode time
 at the normal level, 30 % at the fast level); a cache that verified the
 identity once can decode with `--trusted`, about 1.2 to 1.5 times faster.
 Compression runs at about 8 MB/s (normal) and 13 MB/s (fast) per thread,
-including a check that the output decodes to the input.
+including a check that the output decodes to the input. The fastest
+settings and what they give up are in
+[BENCHMARKS.md](BENCHMARKS.md#fastest-settings).
 
 ## Command line
 
