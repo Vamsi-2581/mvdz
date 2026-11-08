@@ -142,15 +142,15 @@ not know, without reading its body.
 |---|---|---|---|---|
 | 0x01 | META | no | metadata (§3) | one |
 | 0x82 | SEGMENT | yes | one segment of the demo (§5) | any |
-| 0x03 | INDEX | no | whole-demo size, CRC and duration; the segments (§4) | one |
+| 0x03 |  | no | whole-demo size, CRC and duration; the segments (§4) | one |
 | 0x04 | ATTACH | no | one attachment's stored bytes (§10) | any |
 | 0x05 | ADIR | no | the attachment directory (§10) | one |
 | 0x86 | TABLES | yes | rANS models shared by the segments (§2.6) | one |
-| 0x7F | TRAILER | no | offsets of INDEX, META, ADIR; end of the demo part (§2.3) | one, last |
+| 0x7F | TRAILER | no | offsets of , META, ADIR; end of the demo part (§2.3) | one, last |
 
 **Order.** A file has two parts:
 
-* the *demo part*: META, the SEGMENT sections in demo order, then INDEX
+* the *demo part*: META, the SEGMENT sections in demo order, then 
   (META may come before, between or after segments; §5.3 says when it must
   come first); a TABLES section, if any, comes before every SEGMENT;
 * the *attachment part*, from the first ATTACH or ADIR section on: ATTACH
@@ -158,7 +158,7 @@ not know, without reading its body.
 
 Then the TRAILER. Unknown non-critical sections may appear anywhere before
 the trailer (those in the attachment part do not survive a change of the
-attachments, §10). Every one of these is an error: a second META, INDEX,
+attachments, §10). Every one of these is an error: a second META, ,
 ADIR or TABLES; a SEGMENT after the INDEX; a TABLES after a SEGMENT or the
 INDEX; a META, SEGMENT, INDEX or TABLES in the attachment part; an ATTACH
 after the ADIR; ATTACH sections without an ADIR; a TRAILER that
@@ -493,7 +493,7 @@ seeking use.
 * `size`, `crc`: length and CRC-32C of the whole original demo.
 * `duration_ms`: total demo time (sum of all frame time bytes).
 * One entry per SEGMENT section, in file order (= demo order): `off` is the
-  file offset of its section; `raw_len` and `t_start` must equal the
+  file offset of its section header; `raw_len` (at most 2^24) and `t_start` must equal the
   segment header's. Segment i starts at raw offset `sum(raw_len[0..i])`;
   the sum of all `raw_len` must equal `size` (and the META size).
 * **Seeking** (`format.rs:Index::seg_at_time`). `t_start` is the demo time
@@ -1845,7 +1845,7 @@ entry := nlen uv | name[nlen]   UTF-8, non-empty, unique in the file
          size uv                original length
          stored uv              ATTACH body length (must equal the section's)
          sha256 [32]            of the original bytes
-         off u64le              file offset of the ATTACH section
+         off u64le              file offset of the ATTACH section header
          nkv uv | nkv x { klen uv, key[klen], vlen uv, value[vlen] }   keys and values UTF-8, keys unique
 ```
 
